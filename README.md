@@ -11,7 +11,22 @@ Everything runs locally. No paid services, no hosting cost, no outbound network 
 
 ## Run it
 
+`.venv/` is gitignored (as usual — virtual environments don't belong in version control), but on the machine this was built on it already exists with everything installed. If it's there, just activate it:
+
 ```bash
+cd data-quality-framework
+source .venv/bin/activate
+streamlit run app.py
+```
+
+Opens at `http://localhost:8501`.
+
+### Fresh setup (a clone on another machine, or if `.venv` doesn't exist here)
+
+```bash
+cd data-quality-framework
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 streamlit run app.py
 ```
@@ -19,7 +34,9 @@ streamlit run app.py
 ## Test it
 
 ```bash
-pytest
+source .venv/bin/activate
+pytest              # fast suite
+pytest -m slow      # includes the ~500k-row scale test
 ```
 
 ## Layout
