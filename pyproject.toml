@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dq-framework"
+version = "0.1.0"
+description = "Data Quality & Validation Audit Framework — upload a messy dataset, get a profiled, validated, cleaned dataset back with a full audit trail."
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.38",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "great_expectations>=1.2",
+    "duckdb>=1.0",
+    "pyarrow>=16.0",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+    "lxml>=5.2",
+    "defusedxml>=0.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["dq_framework*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: exercises the ~500k-row scale fixture; skipped by default (-m slow to run)"]
+addopts = "-m 'not slow'"
