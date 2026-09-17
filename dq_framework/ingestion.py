@@ -21,7 +21,12 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from .constants import NULL_SENTINELS
+from .constants import MAX_DESIGN_ROWS, NULL_SENTINELS
+
+# Ask each format-specific loader for one row more than the design cap, so
+# load_file() can tell "exactly at the cap" apart from "more rows exist
+# beyond it" without a separate full-file scan just to count rows.
+_READ_LIMIT = MAX_DESIGN_ROWS + 1
 
 BOOLEAN_TRUE_SETS = [
     {"true", "false"},
@@ -103,7 +108,11 @@ def _load_csv(file_bytes: bytes) -> pd.DataFrame:
     delimiter = _sniff_delimiter(text[:8192])
     try:
         return pd.read_csv(
-            io.StringIO(text), sep=delimiter, dtype=str, keep_default_na=False
+            io.StringIO(text),
+            sep=delimiter,
+            dtype=str,
+            keep_default_na=False,
+            nrows=_READ_LIMIT,
         )
     except Exception as e:  # noqa: BLE001
         raise IngestionError(f"Could not parse CSV: {e}") from e
@@ -118,6 +127,7 @@ def _load_excel(file_bytes: bytes, ext: str, sheet_name: str | None) -> pd.DataF
             dtype=str,
             keep_default_na=False,
             engine=engine,
+            nrows=_READ_LIMIT,
         )
     except Exception as e:  # noqa: BLE001
         raise IngestionError(f"Could not parse Excel file: {e}") from e
@@ -128,9 +138,16 @@ def _load_json(file_bytes: bytes) -> pd.DataFrame:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        # Fall back to JSON Lines (one record per line).
+        # Fall back to JSON Lines (one record per line). Stop reading lines
+        # past _READ_LIMIT rather than parsing (and discarding) the rest.
         try:
-            records = [json.loads(line) for line in text.splitlines() if line.strip()]
+            records = []
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                records.append(json.loads(line))
+                if len(records) >= _READ_LIMIT:
+                    break
         except json.JSONDecodeError as e:
             raise IngestionError(f"Could not parse JSON: {e}") from e
         if not records:
@@ -140,12 +157,12 @@ def _load_json(file_bytes: bytes) -> pd.DataFrame:
     if isinstance(data, list):
         if not data:
             raise IngestionError("JSON file contained an empty list.")
-        return pd.json_normalize(data)
+        return pd.json_normalize(data[:_READ_LIMIT])
     if isinstance(data, dict):
         # Common real-world shape: {"meta": {...}, "records": [...]}.
         for value in data.values():
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                return pd.json_normalize(value)
+                return pd.json_normalize(value[:_READ_LIMIT])
         return pd.json_normalize([data])
     raise IngestionError("Unsupported JSON structure — expected a list of records.")
 
@@ -172,9 +189,12 @@ def _validate_xml_safe(file_bytes: bytes) -> None:
 def _load_xml(file_bytes: bytes) -> pd.DataFrame:
     _validate_xml_safe(file_bytes)
     try:
-        return pd.read_xml(io.BytesIO(file_bytes), dtype=str)
+        df = pd.read_xml(io.BytesIO(file_bytes), dtype=str)
     except Exception as e:  # noqa: BLE001
         raise IngestionError(f"Could not parse XML file: {e}") from e
+    # pandas' XML reader has no nrows param — the whole file gets parsed
+    # regardless, but we still cap what flows into the rest of the pipeline.
+    return df.head(_READ_LIMIT)
 
 
 # --------------------------------------------------------------------------
@@ -272,6 +292,15 @@ def load_file(
 
     if df.empty or len(df.columns) == 0:
         raise IngestionError("The file parsed but contained no data.")
+
+    if len(df) > MAX_DESIGN_ROWS:
+        df = df.head(MAX_DESIGN_ROWS)
+        warnings.append(
+            f"This file has more than {MAX_DESIGN_ROWS:,} rows — only the first "
+            f"{MAX_DESIGN_ROWS:,} were kept. This tool is designed and tested up "
+            "to that scale; the rest were discarded rather than silently slowing "
+            "everything down or exhausting memory."
+        )
 
     df.columns = [str(c).strip() for c in df.columns]
     df = df.astype(object).where(df.notna(), pd.NA)

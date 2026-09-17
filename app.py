@@ -135,6 +135,8 @@ with tabs[0]:
 
     if st.session_state.ingestion_result is not None:
         ir = st.session_state.ingestion_result
+        for warning in ir.warnings:
+            st.warning(warning)
         st.subheader("Preview (first 10 rows)")
         st.dataframe(ir.raw_df.head(10))
         if ir.sentinel_null_counts:

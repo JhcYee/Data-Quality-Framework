@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from dq_framework import ingestion
 from dq_framework.ingestion import IngestionError, load_file, normalize_null_sentinels
 
 FIXTURE = Path(__file__).parent / "fixtures" / "messy_sample.csv"
@@ -67,6 +68,35 @@ def test_normalize_null_sentinels_case_insensitive():
     normalized, counts = normalize_null_sentinels(df)
     assert counts["x"] == 4
     assert normalized["x"].isna().sum() == 4
+
+
+def test_row_limit_truncates_and_warns(monkeypatch):
+    monkeypatch.setattr(ingestion, "MAX_DESIGN_ROWS", 5)
+    monkeypatch.setattr(ingestion, "_READ_LIMIT", 6)
+    csv_bytes = ("col\n" + "\n".join(str(i) for i in range(10))).encode()
+    result = ingestion.load_file("data.csv", csv_bytes)
+    assert len(result.raw_df) == 5
+    assert any("more than 5 rows" in w for w in result.warnings)
+
+
+def test_row_limit_not_triggered_when_under_cap(monkeypatch):
+    monkeypatch.setattr(ingestion, "MAX_DESIGN_ROWS", 100)
+    monkeypatch.setattr(ingestion, "_READ_LIMIT", 101)
+    csv_bytes = ("col\n" + "\n".join(str(i) for i in range(10))).encode()
+    result = ingestion.load_file("data.csv", csv_bytes)
+    assert len(result.raw_df) == 10
+    assert result.warnings == []
+
+
+def test_row_limit_exactly_at_cap_is_not_truncated(monkeypatch):
+    """Off-by-one guard: a file with exactly MAX_DESIGN_ROWS rows must not
+    be reported as truncated."""
+    monkeypatch.setattr(ingestion, "MAX_DESIGN_ROWS", 10)
+    monkeypatch.setattr(ingestion, "_READ_LIMIT", 11)
+    csv_bytes = ("col\n" + "\n".join(str(i) for i in range(10))).encode()
+    result = ingestion.load_file("data.csv", csv_bytes)
+    assert len(result.raw_df) == 10
+    assert result.warnings == []
 
 
 def test_xml_xxe_rejected():
