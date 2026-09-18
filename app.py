@@ -53,6 +53,23 @@ def _cached_profile(df: pd.DataFrame, column_types: dict) -> "object":
     return profile_dataset(df, column_types)
 
 
+# Same red/green as the styled HTML report, so a result reads the same way
+# whether you're looking at it live in the app or in the downloaded report.
+_PASS_COLOR = "#4ade80"
+_FAIL_COLOR = "#f87171"
+
+
+def _style_result_column(df: pd.DataFrame, column: str = "Result"):
+    def _color(val):
+        if val == "FAIL":
+            return f"color: {_FAIL_COLOR}; font-weight: 600"
+        if val == "PASS":
+            return f"color: {_PASS_COLOR}; font-weight: 600"
+        return ""
+
+    return df.style.map(_color, subset=[column])
+
+
 def _init_state():
     defaults = {
         "ingestion_result": None,
@@ -275,7 +292,7 @@ with tabs[2]:
                 for r in outcome.results
             ]
             st.dataframe(
-                pd.DataFrame(rows),
+                _style_result_column(pd.DataFrame(rows)),
                 use_container_width=True,
                 column_config={
                     "Check": st.column_config.Column(width=180),
@@ -434,7 +451,7 @@ with tabs[3]:
                 {"Expectation": v.expectation_type, "Column": v.column or "", "Result": "PASS" if v.success else "FAIL", "Unexpected %": f"{v.unexpected_percent:.1%}"}
                 for v in st.session_state.validation_outcomes
             ]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(_style_result_column(pd.DataFrame(rows)), use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # Tab 5 — Clean
