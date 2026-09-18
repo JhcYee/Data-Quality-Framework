@@ -116,6 +116,26 @@ def coerce_column(series: pd.Series, dtype: str) -> tuple[pd.Series, int]:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def coerce_custom_value(value: str, dtype: str) -> tuple[object, bool]:
+    """Validates a single user-entered value (e.g. a custom null-fill value
+    typed into the Clean tab) against a column's confirmed dtype, reusing
+    coerce_column's exact per-dtype coercion logic on a one-element Series
+    rather than re-implementing type parsing. Returns (coerced_value, ok) —
+    ok is False if the value can't be represented as that dtype."""
+    series = pd.Series([value], dtype="object")
+    coerced, n_failures = coerce_column(series, dtype)
+    if n_failures:
+        return None, False
+    result = coerced.iloc[0]
+    if hasattr(result, "item"):
+        # Convert numpy scalars (np.int64, np.float64, np.bool_) to plain
+        # Python types so they display cleanly (e.g. `0` not `np.int64(0)`)
+        # in the changelog and UI — pd.Timestamp has no .item(), so
+        # datetime values pass through untouched.
+        result = result.item()
+    return result, True
+
+
 def confirm_schema(
     raw_df: pd.DataFrame,
     column_types: dict[str, str],

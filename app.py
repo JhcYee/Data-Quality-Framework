@@ -26,6 +26,7 @@ from dq_framework.ingestion import IngestionError, get_extension, list_excel_she
 from dq_framework.profiling import profile_dataset
 from dq_framework.schema_confirmation import (
     ConfirmedSchema,
+    coerce_custom_value,
     confirm_schema,
     find_matching_schema,
     save_confirmed_schema,
@@ -400,9 +401,29 @@ with tabs[4]:
                     "median / mode per column",
                     "numeric columns only",
                     "text columns only",
+                    "type in a value",
                     "leave null, no imputation",
                 ],
             )
+
+        null_custom_value = None
+        if null_strategy == "custom":
+            null_custom_value = st.text_input(
+                "Fill value", help="Validated against each column's confirmed dtype before it's used."
+            )
+            if null_custom_value:
+                preview_rows = []
+                for col, dtype in sr.schema.column_types.items():
+                    coerced, ok = coerce_custom_value(null_custom_value, dtype)
+                    preview_rows.append(
+                        {
+                            "Column": col,
+                            "Dtype": dtype,
+                            "Valid for this dtype?": "Yes" if ok else "No — falls back to auto",
+                            "Would store": repr(coerced) if ok else "",
+                        }
+                    )
+                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
         options = CleaningOptions(
             key_columns=sr.schema.key_columns,
@@ -413,6 +434,7 @@ with tabs[4]:
             null_strategy_overrides=(
                 {col: null_strategy for col in sr.confirmed_df.columns} if null_strategy != "auto" else {}
             ),
+            null_custom_value=null_custom_value,
         )
 
         if st.button("Apply cleaning", type="primary"):

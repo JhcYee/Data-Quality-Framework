@@ -30,7 +30,7 @@ import pandas as pd
 
 from .anomalies.categorical_standardization import find_variant_groups, suggest_canonical_forms
 from .anomalies.outliers import compute_outlier_bounds, outlier_mask
-from .schema_confirmation import coerce_column
+from .schema_confirmation import coerce_column, coerce_custom_value
 
 # "auto"    — default per dtype: median (numeric), mode (categorical/string/
 #             boolean), flag-only (datetime, never guessed).
@@ -39,8 +39,13 @@ from .schema_confirmation import coerce_column
 #             0 isn't a meaningful fill for them.
 # "unknown" — categorical/string columns filled with the constant "Unknown"
 #             instead of the mode; numeric/datetime columns fall back to "auto".
+# "custom"  — a user-entered value (CleaningOptions.null_custom_value),
+#             validated against each column's confirmed dtype via
+#             coerce_custom_value; a column whose dtype the value can't be
+#             coerced to falls back to "auto" for that column, and the
+#             fallback is recorded in the changelog rather than done silently.
 # "skip"    — leave nulls as null in every column, no imputation at all.
-NULL_STRATEGIES = ["auto", "zero", "unknown", "skip"]
+NULL_STRATEGIES = ["auto", "zero", "unknown", "custom", "skip"]
 
 
 @dataclass
@@ -51,6 +56,7 @@ class CleaningOptions:
     apply_categorical_standardization: bool = True
     outlier_action: str = "flag"  # "flag" | "cap" | "drop"
     null_strategy_overrides: dict[str, str] = field(default_factory=dict)  # col -> one of NULL_STRATEGIES
+    null_custom_value: str | None = None  # raw text for the "custom" strategy, validated per column
 
 
 @dataclass
@@ -220,6 +226,30 @@ def clean_dataset(
         pct = n_null / len(working) if len(working) else 0.0
 
         if dtype == "datetime":
+            # Dates get a conservative default (flag, never guessed) since
+            # there's no sensible "median"/"mode" for a date — but an
+            # explicit, valid custom value is the user's own choice, not a
+            # guess, so it's honored if given.
+            datetime_fallback_note = None
+            if strategy == "custom" and options.null_custom_value is not None:
+                custom_value, ok = coerce_custom_value(options.null_custom_value, dtype)
+                if ok:
+                    working[col] = working[col].fillna(custom_value)
+                    log.append(
+                        TransformationLogEntry(
+                            column=col,
+                            change_type="impute_nulls",
+                            before_summary=f"{n_null} nulls ({pct:.0%})",
+                            after_summary=f"filled with custom value {custom_value!r}",
+                            reason=f"{pct:.0%} of values were null; imputed with custom value {custom_value!r}.",
+                        )
+                    )
+                    continue
+                datetime_fallback_note = (
+                    f" (entered value {options.null_custom_value!r} isn't a valid date, "
+                    "so nulls were flagged instead)"
+                )
+
             flag_col = f"_{col}_was_null"
             working[flag_col] = null_mask
             log.append(
@@ -228,7 +258,8 @@ def clean_dataset(
                     change_type="flag_null_datetime",
                     before_summary=f"{n_null} nulls ({pct:.0%})",
                     after_summary=f"{n_null} rows flagged in '{flag_col}', values left as null",
-                    reason=f"{pct:.0%} of values were null; dates aren't safely imputable, so nulls were flagged instead of guessed.",
+                    reason=f"{pct:.0%} of values were null; dates aren't safely imputable, so nulls were flagged instead of guessed."
+                    + (datetime_fallback_note or ""),
                 )
             )
             continue
@@ -246,12 +277,23 @@ def clean_dataset(
             fill_value = mode.iloc[0] if len(mode) else "Unknown"
             method = "mode" if len(mode) else "constant 'Unknown'"
 
+        custom_fallback_note = None
         if strategy == "unknown":
             fill_value = "Unknown" if dtype in ("string", "categorical") else fill_value
             method = "constant 'Unknown'" if dtype in ("string", "categorical") else method
         elif strategy == "zero":
             fill_value = 0 if dtype in ("integer", "float") else fill_value
             method = "constant 0" if dtype in ("integer", "float") else method
+        elif strategy == "custom" and options.null_custom_value is not None:
+            custom_value, ok = coerce_custom_value(options.null_custom_value, dtype)
+            if ok:
+                fill_value = custom_value
+                method = "custom value"  # the value itself is appended once, below
+            else:
+                custom_fallback_note = (
+                    f" (entered value {options.null_custom_value!r} isn't valid for dtype "
+                    f"'{dtype}', so this column fell back to auto)"
+                )
 
         if pd.isna(fill_value):
             # Every value in the column was null — nothing to impute from.
@@ -261,7 +303,8 @@ def clean_dataset(
                     change_type="null_unresolved",
                     before_summary=f"{n_null} nulls ({pct:.0%})",
                     after_summary="left null — no non-null values to derive a fill from",
-                    reason=f"{pct:.0%} of values were null and the entire column was empty, so no {method} could be computed.",
+                    reason=f"{pct:.0%} of values were null and the entire column was empty, so no {method} could be computed."
+                    + (custom_fallback_note or ""),
                 )
             )
             continue
@@ -273,7 +316,8 @@ def clean_dataset(
                 change_type="impute_nulls",
                 before_summary=f"{n_null} nulls ({pct:.0%})",
                 after_summary=f"filled with {method} ({fill_value!r})",
-                reason=f"{pct:.0%} of values were null; imputed with column {method}.",
+                reason=f"{pct:.0%} of values were null; imputed with column {method}."
+                + (custom_fallback_note or ""),
             )
         )
 

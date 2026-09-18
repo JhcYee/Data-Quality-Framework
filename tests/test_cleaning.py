@@ -181,3 +181,68 @@ def test_evidence_based_reasons_contain_numbers():
     result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
     for entry in result.log:
         assert any(ch.isdigit() for ch in entry.reason), f"reason has no evidence: {entry.reason}"
+
+
+def test_null_strategy_custom_value_applied_when_valid():
+    confirmed = _confirmed()
+    options = CleaningOptions(
+        key_columns=["id"],
+        drop_exact_duplicates=False,
+        null_strategy_overrides={"age": "custom"},
+        null_custom_value="0",
+    )
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert result.cleaned_df["age"].isna().sum() == 0
+    entry = next(e for e in result.log if e.column == "age" and e.change_type == "impute_nulls")
+    assert entry.after_summary == "filled with custom value (0)"  # clean repr, not np.int64(0)
+
+
+def test_null_strategy_custom_value_falls_back_when_invalid_for_dtype():
+    """A custom fill value that doesn't parse for a column's dtype must fall
+    back to the auto default and say so in the changelog — never silently
+    apply a value of the wrong type."""
+    confirmed = _confirmed()
+    options = CleaningOptions(
+        key_columns=["id"],
+        drop_exact_duplicates=False,
+        null_strategy_overrides={"age": "custom"},
+        null_custom_value="not a number",
+    )
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert result.cleaned_df["age"].isna().sum() == 0  # still imputed, via fallback
+    entry = next(e for e in result.log if e.column == "age" and e.change_type == "impute_nulls")
+    assert "median" in entry.after_summary  # fell back to the numeric default
+    assert "isn't valid for dtype" in entry.reason
+    assert "fell back to auto" in entry.reason
+
+
+def test_null_strategy_custom_value_invalid_for_datetime_falls_back_to_flag():
+    confirmed = _confirmed()
+    options = CleaningOptions(
+        key_columns=["id"],
+        drop_exact_duplicates=False,
+        null_strategy_overrides={"close_date": "custom"},
+        null_custom_value="Not Yet Resolved",
+    )
+    # Free text isn't a valid date — falls back to the normal (flag-only,
+    # never-guessed) datetime behavior rather than corrupting the column.
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert "_close_date_was_null" in result.cleaned_df.columns
+    entry = next(e for e in result.log if e.column == "close_date")
+    assert "isn't a valid date" in entry.reason
+
+
+def test_null_strategy_custom_value_valid_date_fills_datetime_column():
+    confirmed = _confirmed()
+    options = CleaningOptions(
+        key_columns=["id"],
+        drop_exact_duplicates=False,
+        null_strategy_overrides={"close_date": "custom"},
+        null_custom_value="2099-12-31",
+    )
+    # A genuinely valid date is the user's explicit choice, not a guess —
+    # it should actually be used, unlike the auto/zero/unknown defaults
+    # which always just flag datetime nulls instead of imputing them.
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert result.cleaned_df["close_date"].isna().sum() == 0
+    assert "_close_date_was_null" not in result.cleaned_df.columns

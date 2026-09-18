@@ -5,6 +5,7 @@ import pandas as pd
 from dq_framework.schema_confirmation import (
     ConfirmedSchema,
     coerce_column,
+    coerce_custom_value,
     confirm_schema,
     find_matching_schema,
     save_confirmed_schema,
@@ -67,3 +68,32 @@ def test_find_matching_schema_no_match_returns_none(tmp_path: Path):
     save_confirmed_schema(schema, tmp_path)
     found = find_matching_schema(["totally", "different", "columns"], tmp_path)
     assert found is None
+
+
+def test_coerce_custom_value_valid_integer():
+    value, ok = coerce_custom_value("0", "integer")
+    assert ok
+    assert value == 0
+
+
+def test_coerce_custom_value_invalid_integer():
+    value, ok = coerce_custom_value("not a number", "integer")
+    assert not ok
+    assert value is None
+
+
+def test_coerce_custom_value_string_accepts_anything():
+    value, ok = coerce_custom_value("N/A but not a sentinel here", "string")
+    assert ok
+    assert value == "N/A but not a sentinel here"
+
+
+def test_coerce_custom_value_invalid_datetime():
+    value, ok = coerce_custom_value("definitely not a date", "datetime")
+    assert not ok
+
+
+def test_coerce_custom_value_valid_boolean():
+    value, ok = coerce_custom_value("yes", "boolean")
+    assert ok
+    assert value == True  # noqa: E712
