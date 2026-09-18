@@ -105,6 +105,31 @@ def test_gx_baseline_suite_does_not_trivially_pass_everything():
     assert any(not o.success for o in outcomes), "baseline suite passed everything — it has no real tolerance"
 
 
+def test_gx_baseline_suite_skips_not_null_for_nulls_expected_columns():
+    """The baseline suite's not_null gating must agree with anomalies/nulls.py's
+    pass/fail logic on the same column — both keyed off the user's explicit
+    'nulls expected' intent, not off how null the data already happens to be."""
+    ir = load_file("messy_sample.csv", FIXTURE.read_bytes())
+    column_types_with_age_expected = dict(COLUMN_TYPES)
+    confirmed = confirm_schema(
+        ir.raw_df,
+        column_types_with_age_expected,
+        key_columns=["id"],
+        dataset_name="messy_sample",
+        nulls_expected_columns=["age"],
+    )
+    profile = profile_dataset(confirmed.confirmed_df, COLUMN_TYPES)
+
+    gx_mod = expectations.get_gx()
+    outcomes = pipeline.run_validation(confirmed.confirmed_df, confirmed.schema, profile, gx_module=gx_mod)
+
+    assert not any(o.expectation_type == "expect_column_values_to_not_be_null" and o.column == "age" for o in outcomes)
+    # close_date wasn't marked expected — it should still get the rule.
+    assert any(
+        o.expectation_type == "expect_column_values_to_not_be_null" and o.column == "close_date" for o in outcomes
+    )
+
+
 @pytest.mark.slow
 def test_pipeline_at_scale():
     """~500k-row fixture with the same injected issue types as the small

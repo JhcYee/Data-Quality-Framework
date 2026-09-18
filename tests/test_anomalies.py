@@ -49,6 +49,38 @@ def test_nulls_detects_age_nulls(confirmed):
     assert results["nulls:age"].affected_row_count > 0
 
 
+def test_nulls_flags_any_null_by_default():
+    """Default is strict: a column not marked 'nulls expected' fails on any
+    null at all, not just a high rate — silence should be opt-in."""
+    profile = profile_dataset(pd.DataFrame({"a": [1, 2, None, 4]}), {"a": "float"})
+    results = {r.check_name: r for r in detect_nulls(profile)}
+    assert not results["nulls:a"].passed
+    assert results["nulls:a"].affected_row_count == 1
+
+
+def test_nulls_lenient_when_expected():
+    df = pd.DataFrame({"a": [1] * 19 + [None]})  # 5% null
+    profile = profile_dataset(df, {"a": "float"})
+    results = {r.check_name: r for r in detect_nulls(profile, nulls_expected_columns={"a"})}
+    assert results["nulls:a"].passed  # 5% < the 20% lenient threshold
+
+
+def test_nulls_still_flags_expected_column_above_lenient_threshold():
+    df = pd.DataFrame({"a": [1] * 5 + [None] * 5})  # 50% null
+    profile = profile_dataset(df, {"a": "float"})
+    results = {r.check_name: r for r in detect_nulls(profile, nulls_expected_columns={"a"})}
+    assert not results["nulls:a"].passed  # 50% > 20%, still flagged even though "expected"
+
+
+def test_nulls_expected_flag_is_per_column():
+    # Same low null rate (5%) in both columns — only "a" is marked expected.
+    df = pd.DataFrame({"a": [1] * 19 + [None], "b": [1] * 19 + [None]})
+    profile = profile_dataset(df, {"a": "float", "b": "float"})
+    results = {r.check_name: r for r in detect_nulls(profile, nulls_expected_columns={"a"})}
+    assert results["nulls:a"].passed  # marked expected, 5% < 20% lenient threshold
+    assert not results["nulls:b"].passed  # not marked -> flagged at any null rate
+
+
 def test_exact_duplicates_detected(confirmed):
     engine = SQLiteEngine()
     try:

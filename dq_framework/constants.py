@@ -14,7 +14,14 @@ IQR_MULTIPLIER = 1.5
 # are skipped by IQR-based outlier detection.
 MIN_DISTINCT_FOR_OUTLIER_CHECK = 10
 
-# Null-percentage threshold above which a column is flagged as high-null.
+# Null-percentage thresholds for anomalies/nulls.py. A column NOT marked
+# "nulls expected" (the default) is flagged at any null rate above
+# STRICT_NULL_THRESHOLD (0% — i.e. any null at all); a column the user has
+# explicitly marked as expecting some nulls only gets flagged above the more
+# lenient HIGH_NULL_THRESHOLD instead. The default is strict because a null
+# in a column nobody expected to have one is exactly the kind of thing this
+# tool exists to surface — silence should be opt-in, not the default.
+STRICT_NULL_THRESHOLD = 0.0
 HIGH_NULL_THRESHOLD = 0.20
 
 # Categorical values with frequency below this share of non-null rows are

@@ -42,6 +42,7 @@ class ConfirmedSchema:
     dataset_name: str
     column_types: dict[str, str]  # col -> one of DTYPE_CHOICES
     key_columns: list[str] = field(default_factory=list)
+    nulls_expected_columns: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -49,6 +50,7 @@ class ConfirmedSchema:
                 "dataset_name": self.dataset_name,
                 "column_types": self.column_types,
                 "key_columns": self.key_columns,
+                "nulls_expected_columns": self.nulls_expected_columns,
             },
             indent=2,
         )
@@ -60,6 +62,7 @@ class ConfirmedSchema:
             dataset_name=data["dataset_name"],
             column_types=data["column_types"],
             key_columns=data.get("key_columns", []),
+            nulls_expected_columns=data.get("nulls_expected_columns", []),
         )
 
 
@@ -141,6 +144,7 @@ def confirm_schema(
     column_types: dict[str, str],
     key_columns: list[str] | None = None,
     dataset_name: str = "dataset",
+    nulls_expected_columns: list[str] | None = None,
 ) -> SchemaConfirmationResult:
     confirmed_df = pd.DataFrame(index=raw_df.index)
     failure_counts: dict[str, int] = {}
@@ -156,6 +160,7 @@ def confirm_schema(
         dataset_name=dataset_name,
         column_types=dict(column_types),
         key_columns=list(key_columns or []),
+        nulls_expected_columns=list(nulls_expected_columns or []),
     )
     return SchemaConfirmationResult(confirmed_df, schema, failure_counts)
 

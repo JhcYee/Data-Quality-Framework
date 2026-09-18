@@ -62,7 +62,9 @@ def run_anomaly_detection(
     outcome = AnomalyDetectionOutcome()
     _load_with_row_id(engine, df, table_name)
 
-    outcome.results.extend(nulls.detect_nulls(profile))
+    outcome.results.extend(
+        nulls.detect_nulls(profile, nulls_expected_columns=set(schema.nulls_expected_columns))
+    )
 
     outcome.results.append(duplicates.detect_exact_duplicates(engine, table_name, list(df.columns)))
     key_dupe = duplicates.detect_key_duplicates(engine, table_name, schema.key_columns)
@@ -112,7 +114,13 @@ def run_validation(
     gx_module = gx_module or expectations.get_gx()
     context = expectations.new_ephemeral_context(gx_module)
     suite, _ = expectations.build_baseline_suite(
-        context, df, profile, schema.column_types, schema.key_columns, gx_module=gx_module
+        context,
+        df,
+        profile,
+        schema.column_types,
+        schema.key_columns,
+        nulls_expected_columns=set(schema.nulls_expected_columns),
+        gx_module=gx_module,
     )
     for spec in custom_expectations or []:
         expectations.add_manual_expectation(suite, spec.kind, spec.column, spec.params, gx_module=gx_module)

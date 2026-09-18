@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from .anomalies.outliers import compute_outlier_bounds
-from .constants import HIGH_NULL_THRESHOLD, RARE_CATEGORY_FREQUENCY_THRESHOLD
+from .constants import RARE_CATEGORY_FREQUENCY_THRESHOLD
 from .profiling import DatasetProfile
 
 EXPECTATION_KINDS = ["not_null", "unique", "between", "in_set", "regex", "row_count_between"]
@@ -72,6 +72,7 @@ def build_baseline_suite(
     profile: DatasetProfile,
     column_types: dict[str, str],
     key_columns: list[str] | None = None,
+    nulls_expected_columns: set[str] | None = None,
     suite_name: str = "baseline_suite",
     gx_module=None,
 ):
@@ -79,11 +80,16 @@ def build_baseline_suite(
     suite = context.suites.add(gx_module.ExpectationSuite(name=suite_name))
     specs: list[ExpectationSpec] = []
     key_columns = key_columns or []
+    nulls_expected_columns = nulls_expected_columns or set()
 
     for col, dtype in column_types.items():
         cp = profile.columns[col]
 
-        if cp.null_pct < HIGH_NULL_THRESHOLD:
+        # Gated on the user's explicit intent (Schema Confirmation), not on
+        # how much of the data happens to already be null — matching
+        # anomalies/nulls.py, so a "not_null" failure here and a FAIL on the
+        # nulls: anomaly check always agree on the same column.
+        if col not in nulls_expected_columns:
             suite.add_expectation(gx_module.expectations.ExpectColumnValuesToNotBeNull(column=col))
             specs.append(ExpectationSpec("not_null", col))
 

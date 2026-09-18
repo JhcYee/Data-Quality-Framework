@@ -47,6 +47,28 @@ def test_confirm_schema_composite_key_and_failure_counts():
     assert result.schema.key_columns == ["a", "b"]
 
 
+def test_confirm_schema_nulls_expected_columns():
+    df = pd.DataFrame({"a": ["1", "2"], "b": ["x", "y"]})
+    result = confirm_schema(
+        df, {"a": "integer", "b": "string"}, dataset_name="t", nulls_expected_columns=["b"]
+    )
+    assert result.schema.nulls_expected_columns == ["b"]
+
+
+def test_confirmed_schema_json_round_trip_includes_nulls_expected():
+    schema = ConfirmedSchema("orders", {"a": "integer", "b": "string"}, key_columns=["a"], nulls_expected_columns=["b"])
+    restored = ConfirmedSchema.from_json(schema.to_json())
+    assert restored.nulls_expected_columns == ["b"]
+    assert restored.key_columns == ["a"]
+
+
+def test_confirmed_schema_from_json_defaults_nulls_expected_when_absent():
+    """Old saved schemas (from before this field existed) must still load."""
+    old_json = '{"dataset_name": "orders", "column_types": {"a": "integer"}, "key_columns": ["a"]}'
+    restored = ConfirmedSchema.from_json(old_json)
+    assert restored.nulls_expected_columns == []
+
+
 def test_save_and_find_matching_schema(tmp_path: Path):
     schema = ConfirmedSchema("orders", {"id": "integer", "name": "string"}, ["id"])
     save_confirmed_schema(schema, tmp_path)

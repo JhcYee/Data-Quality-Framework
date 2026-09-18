@@ -168,6 +168,7 @@ with tabs[1]:
             guess = ir.column_guesses[col]
             default_type = (saved_schema.column_types.get(col) if saved_schema else None) or guess.inferred_dtype
             default_key = col in (saved_schema.key_columns if saved_schema else [])
+            default_nulls_expected = col in (saved_schema.nulls_expected_columns if saved_schema else [])
             rows.append(
                 {
                     "Column": col,
@@ -176,15 +177,22 @@ with tabs[1]:
                     "Samples": ", ".join(guess.samples),
                     "Confirmed type": default_type,
                     "Key column?": default_key,
+                    "Nulls expected?": default_nulls_expected,
                 }
             )
         edit_df = pd.DataFrame(rows)
 
+        st.caption(
+            "By default, **any** null in a column is flagged — check 'Nulls expected?' for columns "
+            "where some missing data is normal (e.g. an optional field), which raises the bar to "
+            "only flagging if more than 20% of the column is null."
+        )
         edited = st.data_editor(
             edit_df,
             column_config={
                 "Confirmed type": st.column_config.SelectboxColumn(options=DTYPE_CHOICES, required=True),
                 "Key column?": st.column_config.CheckboxColumn(),
+                "Nulls expected?": st.column_config.CheckboxColumn(),
             },
             disabled=["Column", "Inferred type", "Confidence", "Samples"],
             hide_index=True,
@@ -197,7 +205,14 @@ with tabs[1]:
         if st.button("Confirm Schema", type="primary"):
             column_types = dict(zip(edited["Column"], edited["Confirmed type"]))
             key_columns = edited.loc[edited["Key column?"], "Column"].tolist()
-            result = confirm_schema(ir.raw_df, column_types, key_columns, dataset_name=dataset_name)
+            nulls_expected_columns = edited.loc[edited["Nulls expected?"], "Column"].tolist()
+            result = confirm_schema(
+                ir.raw_df,
+                column_types,
+                key_columns,
+                dataset_name=dataset_name,
+                nulls_expected_columns=nulls_expected_columns,
+            )
             st.session_state.schema_result = result
             st.session_state.profile_before = _cached_profile(result.confirmed_df, column_types)
             for k in ("anomaly_outcome", "validation_outcomes", "cleaning_result", "profile_after", "reports"):
