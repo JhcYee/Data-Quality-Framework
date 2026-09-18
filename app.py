@@ -19,7 +19,7 @@ import streamlit as st
 
 from dq_framework import expectations, pipeline
 from dq_framework.anomalies import consistency
-from dq_framework.cleaning import CleaningOptions
+from dq_framework.cleaning import NULL_STRATEGIES, CleaningOptions
 from dq_framework.constants import DTYPE_CHOICES
 from dq_framework.expectations import EXPECTATION_KINDS, ExpectationSpec
 from dq_framework.ingestion import IngestionError, get_extension, list_excel_sheets, load_file
@@ -392,6 +392,17 @@ with tabs[4]:
             apply_categorical_standardization = st.checkbox("Standardize categorical case/whitespace variants", value=True)
         with c2:
             outlier_action = st.radio("Outlier handling", ["flag", "cap", "drop"], horizontal=True)
+            null_strategy = st.radio(
+                "Null handling",
+                NULL_STRATEGIES,
+                horizontal=True,
+                captions=[
+                    "median / mode per column",
+                    "numeric columns only",
+                    "text columns only",
+                    "leave null, no imputation",
+                ],
+            )
 
         options = CleaningOptions(
             key_columns=sr.schema.key_columns,
@@ -399,6 +410,9 @@ with tabs[4]:
             drop_key_duplicates=drop_key_duplicates,
             apply_categorical_standardization=apply_categorical_standardization,
             outlier_action=outlier_action,
+            null_strategy_overrides=(
+                {col: null_strategy for col in sr.confirmed_df.columns} if null_strategy != "auto" else {}
+            ),
         )
 
         if st.button("Apply cleaning", type="primary"):

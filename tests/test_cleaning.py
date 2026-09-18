@@ -129,6 +129,37 @@ def test_null_strategy_skip_leaves_column_untouched():
     assert result.cleaned_df["age"].isna().sum() == before_nulls
 
 
+def test_null_strategy_zero_fills_numeric_with_zero():
+    confirmed = _confirmed()
+    options = CleaningOptions(key_columns=["id"], drop_exact_duplicates=False, null_strategy_overrides={"age": "zero"})
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert result.cleaned_df["age"].isna().sum() == 0
+    entry = next(e for e in result.log if e.column == "age" and e.change_type == "impute_nulls")
+    assert "constant 0" in entry.after_summary
+
+
+def test_null_strategy_zero_does_not_affect_text_columns():
+    """'zero' only makes sense for numeric columns — text columns should
+    fall back to their normal mode-based default, not literally fill with 0."""
+    confirmed = _confirmed()
+    options = CleaningOptions(
+        key_columns=["id"], drop_exact_duplicates=False, null_strategy_overrides={"status": "zero"}
+    )
+    result = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, options)
+    assert (result.cleaned_df["status"].astype(str) == "0").sum() == 0
+
+
+def test_null_strategy_auto_is_equivalent_to_no_override():
+    confirmed = _confirmed()
+    baseline = clean_dataset(confirmed.confirmed_df, COLUMN_TYPES, CleaningOptions(key_columns=["id"], drop_exact_duplicates=False))
+    explicit_auto = clean_dataset(
+        confirmed.confirmed_df,
+        COLUMN_TYPES,
+        CleaningOptions(key_columns=["id"], drop_exact_duplicates=False, null_strategy_overrides={"age": "auto"}),
+    )
+    pd.testing.assert_series_equal(baseline.cleaned_df["age"], explicit_auto.cleaned_df["age"])
+
+
 def test_referential_and_consistency_flags():
     confirmed = _confirmed()
     idx = confirmed.confirmed_df.index[:3]

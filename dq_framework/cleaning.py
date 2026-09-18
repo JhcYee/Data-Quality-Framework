@@ -32,6 +32,16 @@ from .anomalies.categorical_standardization import find_variant_groups, suggest_
 from .anomalies.outliers import compute_outlier_bounds, outlier_mask
 from .schema_confirmation import coerce_column
 
+# "auto"    — default per dtype: median (numeric), mode (categorical/string/
+#             boolean), flag-only (datetime, never guessed).
+# "zero"    — numeric columns filled with 0 instead of the median;
+#             categorical/string/datetime columns fall back to "auto" since
+#             0 isn't a meaningful fill for them.
+# "unknown" — categorical/string columns filled with the constant "Unknown"
+#             instead of the mode; numeric/datetime columns fall back to "auto".
+# "skip"    — leave nulls as null in every column, no imputation at all.
+NULL_STRATEGIES = ["auto", "zero", "unknown", "skip"]
+
 
 @dataclass
 class CleaningOptions:
@@ -40,7 +50,7 @@ class CleaningOptions:
     drop_key_duplicates: bool = False  # False = flag only, True = drop
     apply_categorical_standardization: bool = True
     outlier_action: str = "flag"  # "flag" | "cap" | "drop"
-    null_strategy_overrides: dict[str, str] = field(default_factory=dict)  # col -> "median"|"mode"|"unknown"|"skip"
+    null_strategy_overrides: dict[str, str] = field(default_factory=dict)  # col -> one of NULL_STRATEGIES
 
 
 @dataclass
@@ -239,6 +249,9 @@ def clean_dataset(
         if strategy == "unknown":
             fill_value = "Unknown" if dtype in ("string", "categorical") else fill_value
             method = "constant 'Unknown'" if dtype in ("string", "categorical") else method
+        elif strategy == "zero":
+            fill_value = 0 if dtype in ("integer", "float") else fill_value
+            method = "constant 0" if dtype in ("integer", "float") else method
 
         if pd.isna(fill_value):
             # Every value in the column was null — nothing to impute from.
