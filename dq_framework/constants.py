@@ -37,3 +37,10 @@ NULL_SENTINELS = {
 }
 
 DTYPE_CHOICES = ["string", "integer", "float", "boolean", "datetime", "categorical"]
+
+# Typo detection: a categorical value is a candidate typo of a more frequent
+# value in the same column if their edit (Levenshtein) distance is at most
+# this. Kept small and conservative — this only flags, never edits, but a
+# too-generous distance would still flag two genuinely different short
+# category names as typos of each other.
+MAX_TYPO_EDIT_DISTANCE = 2

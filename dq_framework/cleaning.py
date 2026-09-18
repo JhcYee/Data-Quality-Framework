@@ -9,7 +9,7 @@ next stage's statistics:
 
   1. Duplicates       4. Nulls
   2. Categorical std.  5. Schema drift coercion
-  3. Outliers          6. Referential/consistency violations (flag only)
+  3. Outliers          6. Referential/consistency/typo flags (flag only, never edited)
 
 Coercion-failure nulls from Schema Confirmation are already ordinary nulls
 by the time this module runs (Schema Confirmation resolves coercion before
@@ -80,6 +80,7 @@ def clean_dataset(
     options: CleaningOptions,
     referential_flag_indices: dict[str, pd.Index] | None = None,
     consistency_flag_indices: dict[str, pd.Index] | None = None,
+    typo_flag_indices: dict[str, pd.Index] | None = None,
     previous_schema_types: dict[str, str] | None = None,
 ) -> CleaningResult:
     working = df.copy()
@@ -350,7 +351,7 @@ def clean_dataset(
                     )
                 )
 
-    # 6. Referential / consistency violations — flag only, never drop --------
+    # 6. Referential / consistency / typo flags — flag only, never drop/edit -
     for check_name, idx in (referential_flag_indices or {}).items():
         idx = idx.intersection(working.index)
         if len(idx) == 0:
@@ -384,6 +385,28 @@ def clean_dataset(
                 before_summary=f"{len(idx)} unflagged rows ({check_name})",
                 after_summary=f"{len(idx)} rows flagged in '{flag_col}'",
                 reason=f"{len(idx)} rows failed the cross-column consistency check '{check_name}'; flagged, not dropped.",
+            )
+        )
+
+    for check_name, idx in (typo_flag_indices or {}).items():
+        idx = idx.intersection(working.index)
+        if len(idx) == 0:
+            continue
+        flag_col = "_typo_suspected"
+        if flag_col not in working.columns:
+            working[flag_col] = False
+        working.loc[idx, flag_col] = True
+        log.append(
+            TransformationLogEntry(
+                column=check_name.split(":", 1)[-1] if ":" in check_name else None,
+                change_type="flag_typo_suspected",
+                before_summary=f"{len(idx)} unflagged rows ({check_name})",
+                after_summary=f"{len(idx)} rows flagged in '{flag_col}'",
+                reason=(
+                    f"{len(idx)} rows contain a value suspected to be a typo of a more common "
+                    f"value in the same column ('{check_name}'); flagged, not changed — fuzzy "
+                    "matches are too uncertain to auto-correct."
+                ),
             )
         )
 

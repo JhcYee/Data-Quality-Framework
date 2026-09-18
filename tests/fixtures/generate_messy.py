@@ -63,6 +63,14 @@ def generate_messy_df(n_rows: int = 200, seed: int = 42) -> pd.DataFrame:
         }
     )
 
+    # A deliberate misspelling (not a case/whitespace variant) of a common
+    # borough, to exercise fuzzy typo detection specifically — distinct from
+    # the case/whitespace variants above, which normalize identically and
+    # are handled by categorical_standardization instead.
+    queens_positions = df.index[df["borough"] == "Queens"]
+    if len(queens_positions):
+        df.loc[queens_positions[0], "borough"] = "Qeens"
+
     n_exact_dupes = max(1, n_rows // 50)
     dupe_rows = df.sample(n=n_exact_dupes, random_state=seed)
     df = pd.concat([df, dupe_rows], ignore_index=True)

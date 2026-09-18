@@ -55,6 +55,7 @@ def _run_pipeline(df: pd.DataFrame, engine_kind: str = "sqlite"):
         CleaningOptions(key_columns=["id"]),
         referential_flag_indices=outcome.referential_flag_indices,
         consistency_flag_indices=outcome.consistency_flag_indices,
+        typo_flag_indices=outcome.typo_flag_indices,
     )
     profile_after = profile_dataset(cleaning_result.cleaned_df, COLUMN_TYPES)
 
@@ -68,6 +69,12 @@ def test_full_pipeline_small_fixture():
     assert any(not r.passed for r in outcome.results)  # the fixture is deliberately messy
     assert len(cleaning_result.log) > 0
     assert cleaning_result.cleaned_df["age"].isna().sum() == 0
+
+    assert any(r.check_name == "typos:borough" for r in outcome.results)
+    assert "_typo_suspected" in cleaning_result.cleaned_df.columns
+    assert cleaning_result.cleaned_df["_typo_suspected"].sum() >= 1
+    # Flagged, never rewritten — the misspelling itself must still be present.
+    assert "Qeens" in cleaning_result.cleaned_df["borough"].values
 
     reports = pipeline.generate_reports(
         "messy_sample",

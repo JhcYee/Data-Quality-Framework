@@ -14,6 +14,7 @@ from dq_framework.anomalies.nulls import detect_nulls
 from dq_framework.anomalies.outliers import compute_outlier_bounds, detect_outliers
 from dq_framework.anomalies.referential import detect_referential_integrity
 from dq_framework.anomalies.schema_drift import detect_schema_drift
+from dq_framework.anomalies.typos import detect_typos
 from dq_framework.ingestion import load_file
 from dq_framework.profiling import profile_dataset
 from dq_framework.schema_confirmation import ConfirmedSchema, confirm_schema
@@ -114,6 +115,18 @@ def test_detect_categorical_variants_on_fixture(confirmed):
     results = detect_categorical_variants(confirmed.confirmed_df, COLUMN_TYPES)
     assert "borough" in results
     assert results["borough"].affected_row_count > 0
+
+
+def test_detect_typos_on_fixture(confirmed):
+    """messy_sample.csv has a deliberate "Qeens" misspelling of "Queens",
+    distinct from the case/whitespace variants (which categorical_standardization
+    already catches, not this detector)."""
+    results = detect_typos(confirmed.confirmed_df, COLUMN_TYPES)
+    assert "borough" in results
+    assert not results["borough"].passed
+    assert results["borough"].affected_row_count >= 1
+    assert results["borough"].details is not None
+    assert "qeens" in results["borough"].details["borough"].str.lower().values
 
 
 def test_consistency_detects_close_before_signup(confirmed):

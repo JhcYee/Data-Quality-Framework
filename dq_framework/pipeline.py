@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import expectations
-from .anomalies import categorical_standardization, consistency, duplicates, nulls, outliers, referential, schema_drift
+from .anomalies import categorical_standardization, consistency, duplicates, nulls, outliers, referential, schema_drift, typos
 from .anomalies.types import AnomalyResult
 from .cleaning import CleaningOptions, CleaningResult, TransformationLogEntry, clean_dataset
 from .expectations import ExpectationSpec, ValidationOutcome
@@ -37,6 +37,7 @@ class AnomalyDetectionOutcome:
     results: list[AnomalyResult] = field(default_factory=list)
     referential_flag_indices: dict[str, pd.Index] = field(default_factory=dict)
     consistency_flag_indices: dict[str, pd.Index] = field(default_factory=dict)
+    typo_flag_indices: dict[str, pd.Index] = field(default_factory=dict)
 
 
 def _load_with_row_id(engine, df: pd.DataFrame, table_name: str) -> None:
@@ -72,6 +73,14 @@ def run_anomaly_detection(
     outcome.results.extend(
         categorical_standardization.detect_categorical_variants(df, schema.column_types).values()
     )
+
+    for res in typos.detect_typos(df, schema.column_types).values():
+        outcome.results.append(res)
+        if res.details is not None and not res.details.empty:
+            # Pure pandas, index-preserving — no SQL round-trip here, so
+            # unlike the referential/consistency checks below there's no
+            # need for the _dq_row_id indirection to recover row identity.
+            outcome.typo_flag_indices[res.check_name] = res.details.index
 
     if reference_df is not None and referential_pairs:
         engine.load(reference_df, reference_table_name)
@@ -116,6 +125,7 @@ def run_cleaning(
     options: CleaningOptions,
     referential_flag_indices: dict[str, pd.Index] | None = None,
     consistency_flag_indices: dict[str, pd.Index] | None = None,
+    typo_flag_indices: dict[str, pd.Index] | None = None,
     previous_schema: ConfirmedSchema | None = None,
 ) -> CleaningResult:
     return clean_dataset(
@@ -124,6 +134,7 @@ def run_cleaning(
         options,
         referential_flag_indices=referential_flag_indices,
         consistency_flag_indices=consistency_flag_indices,
+        typo_flag_indices=typo_flag_indices,
         previous_schema_types=(previous_schema.column_types if previous_schema else None),
     )
 

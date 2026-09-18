@@ -447,6 +447,7 @@ with tabs[4]:
                 options,
                 referential_flag_indices=outcome.referential_flag_indices,
                 consistency_flag_indices=outcome.consistency_flag_indices,
+                typo_flag_indices=outcome.typo_flag_indices,
                 previous_schema=previous_schema,
             )
             st.session_state.cleaning_result = result
