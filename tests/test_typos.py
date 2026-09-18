@@ -62,3 +62,26 @@ def test_detect_typos_flags_affected_rows_not_columns_of_other_dtypes():
     assert result.affected_row_count == 1
     assert result.details is not None
     assert list(result.details.index) == [10]  # the "Manhattn" row, by original index
+
+
+def test_detect_typos_respects_dismissed_variants():
+    """A human-reviewed false positive (e.g. 'poor' vs 'good', both at edit
+    distance 2 despite being genuinely different categories) must disappear
+    entirely once dismissed — not just get a lower confidence."""
+    df = pd.DataFrame({"borough": ["Manhattan"] * 10 + ["Manhattn"]})
+    results = detect_typos(df, {"borough": "categorical"}, dismissed_variants={"borough": {"manhattn"}})
+    assert results == {}
+
+
+def test_detect_typos_dismissal_is_per_column():
+    df = pd.DataFrame(
+        {
+            "borough": ["Manhattan"] * 10 + ["Manhattn"],
+            "status": ["good"] * 7 + ["poor"] * 4,
+        }
+    )
+    # Dismiss the "status" false positive only, not "borough" — each
+    # column's review is independent.
+    results = detect_typos(df, {"borough": "categorical", "status": "categorical"}, dismissed_variants={"status": {"poor"}})
+    assert "borough" in results
+    assert "status" not in results

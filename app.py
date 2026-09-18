@@ -19,6 +19,7 @@ import streamlit as st
 
 from dq_framework import expectations, pipeline
 from dq_framework.anomalies import consistency
+from dq_framework.anomalies.typos import find_typo_groups
 from dq_framework.cleaning import NULL_STRATEGIES, CleaningOptions
 from dq_framework.constants import DTYPE_CHOICES
 from dq_framework.expectations import EXPECTATION_KINDS, ExpectationSpec
@@ -64,6 +65,7 @@ def _init_state():
         "custom_expectations": [],
         "consistency_pairs_selected": [],
         "referential_pairs_selected": [],
+        "dismissed_typo_variants": {},
         "sql_engine_override": "auto",
         "validation_outcomes": None,
         "cleaning_result": None,
@@ -117,6 +119,7 @@ with tabs[0]:
                 # Uploading a new main file invalidates everything downstream.
                 for k in ("schema_result", "anomaly_outcome", "validation_outcomes", "cleaning_result", "profile_after", "reports"):
                     st.session_state[k] = None
+                st.session_state.dismissed_typo_variants = {}
                 st.success(f"Loaded {uploaded.name}: {len(result.raw_df):,} rows × {len(result.raw_df.columns)} columns")
 
     st.divider()
@@ -199,6 +202,7 @@ with tabs[1]:
             st.session_state.profile_before = _cached_profile(result.confirmed_df, column_types)
             for k in ("anomaly_outcome", "validation_outcomes", "cleaning_result", "profile_after", "reports"):
                 st.session_state[k] = None
+            st.session_state.dismissed_typo_variants = {}
             if save_for_next_time:
                 save_confirmed_schema(result.schema, SCHEMAS_DIR)
             st.success("Schema confirmed.")
@@ -242,6 +246,7 @@ with tabs[2]:
                     sr.schema,
                     profile,
                     engine,
+                    dismissed_typo_variants=st.session_state.dismissed_typo_variants,
                     previous_schema=previous_schema,
                 )
             finally:
@@ -254,7 +259,14 @@ with tabs[2]:
                 {"Check": r.check_name, "Result": "PASS" if r.passed else "FAIL", "Rows affected": r.affected_row_count, "Summary": r.summary}
                 for r in outcome.results
             ]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(rows),
+                use_container_width=True,
+                column_config={
+                    "Check": st.column_config.Column(width=180),
+                    "Summary": st.column_config.Column(width=950),
+                },
+            )
             st.caption(
                 "Referential integrity and cross-column consistency checks run from the Rules tab, "
                 "once a reference file / column pairs are configured."
@@ -324,6 +336,38 @@ with tabs[3]:
             if st.session_state.referential_pairs_selected:
                 st.write("Pairs checked: " + ", ".join(f"{m} → {r}" for m, r in st.session_state.referential_pairs_selected))
 
+        st.subheader("Review possible typos")
+        st.caption(
+            "Fuzzy matching flags short similar-looking values as possible typos, but some pairs "
+            "are genuinely different categories that just happen to be a couple of edits apart "
+            "(e.g. 'poor' vs 'good', 'active' vs 'inactive'). Uncheck anything that's intentional — "
+            "it won't be flagged, and the value itself is never changed either way."
+        )
+        any_typo_groups = False
+        for col, dt in sr.schema.column_types.items():
+            if dt != "categorical":
+                continue
+            groups = find_typo_groups(sr.confirmed_df[col])
+            if not groups:
+                continue
+            counts = sr.confirmed_df[col].dropna().astype(str).str.strip().str.lower().value_counts()
+            dismissed_for_col = st.session_state.dismissed_typo_variants.setdefault(col, set())
+            for canonical, variants in groups.items():
+                for variant in variants:
+                    any_typo_groups = True
+                    is_typo = st.checkbox(
+                        f"**{col}**: {variant!r} ({counts.get(variant, 0)} occurrence(s)) looks like a "
+                        f"typo of {canonical!r} ({counts.get(canonical, 0)} occurrence(s))",
+                        value=variant not in dismissed_for_col,
+                        key=f"typo_review_{col}_{canonical}_{variant}",
+                    )
+                    if is_typo:
+                        dismissed_for_col.discard(variant)
+                    else:
+                        dismissed_for_col.add(variant)
+        if not any_typo_groups:
+            st.caption("No possible typos detected in any categorical column.")
+
         if st.button("Run validation & consistency checks", type="primary"):
             engine_kind = select_engine_kind(
                 profile.n_rows, sr.confirmed_df.memory_usage(deep=True).sum(), st.session_state.sql_engine_override
@@ -353,6 +397,7 @@ with tabs[3]:
                     reference_df=reference_df,
                     referential_pairs=st.session_state.referential_pairs_selected,
                     consistency_pairs=st.session_state.consistency_pairs_selected,
+                    dismissed_typo_variants=st.session_state.dismissed_typo_variants,
                     previous_schema=previous_schema,
                 )
             finally:
@@ -468,7 +513,15 @@ with tabs[4]:
                 {"Column": e.column or "(table-level)", "Change": e.change_type, "Before": e.before_summary, "After": e.after_summary, "Why": e.reason}
                 for e in cr.log
             ]
-            st.dataframe(pd.DataFrame(log_rows), use_container_width=True)
+            st.dataframe(
+                pd.DataFrame(log_rows),
+                use_container_width=True,
+                column_config={
+                    "Before": st.column_config.Column(width=180),
+                    "After": st.column_config.Column(width=180),
+                    "Why": st.column_config.Column(width=950),
+                },
+            )
 
             st.subheader("Cleaned data (first 10 rows)")
             st.dataframe(cr.cleaned_df.head(10))

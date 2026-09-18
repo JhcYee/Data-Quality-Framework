@@ -56,6 +56,7 @@ def run_anomaly_detection(
     reference_table_name: str = "reference",
     referential_pairs: list[tuple[str, str]] | None = None,
     consistency_pairs: list[tuple[str, str]] | None = None,
+    dismissed_typo_variants: dict[str, set[str]] | None = None,
     previous_schema: ConfirmedSchema | None = None,
 ) -> AnomalyDetectionOutcome:
     outcome = AnomalyDetectionOutcome()
@@ -74,7 +75,7 @@ def run_anomaly_detection(
         categorical_standardization.detect_categorical_variants(df, schema.column_types).values()
     )
 
-    for res in typos.detect_typos(df, schema.column_types).values():
+    for res in typos.detect_typos(df, schema.column_types, dismissed_variants=dismissed_typo_variants).values():
         outcome.results.append(res)
         if res.details is not None and not res.details.empty:
             # Pure pandas, index-preserving — no SQL round-trip here, so

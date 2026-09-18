@@ -75,12 +75,28 @@ def find_typo_groups(
     return groups
 
 
-def detect_typos(df: pd.DataFrame, column_types: dict[str, str]) -> dict[str, AnomalyResult]:
+def detect_typos(
+    df: pd.DataFrame,
+    column_types: dict[str, str],
+    dismissed_variants: dict[str, set[str]] | None = None,
+) -> dict[str, AnomalyResult]:
+    """dismissed_variants: {column: {normalized_variant, ...}} — pairs a
+    human has already reviewed and confirmed are NOT typos (e.g. "poor" is
+    a real value, not a typo of "good" — both land at edit distance 2, the
+    same as many genuine typos, so this kind of false positive is expected
+    and needs a human in the loop, not a tighter distance threshold)."""
+    dismissed_variants = dismissed_variants or {}
     results: dict[str, AnomalyResult] = {}
     for col, dtype in column_types.items():
         if dtype != "categorical" or col not in df.columns:
             continue
         groups = find_typo_groups(df[col])
+        col_dismissed = dismissed_variants.get(col, set())
+        groups = {
+            canonical: [v for v in variants if v not in col_dismissed]
+            for canonical, variants in groups.items()
+        }
+        groups = {canonical: variants for canonical, variants in groups.items() if variants}
         if not groups:
             continue
 
