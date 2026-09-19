@@ -172,3 +172,73 @@ def test_pipeline_at_scale():
     assert all(len(data) > 0 for data in reports.values())
 
     assert elapsed < 300, f"pipeline took {elapsed:.1f}s at {n_rows} rows — investigate before shipping"
+
+
+def _small_validation_setup():
+    df = pd.DataFrame({"id": range(30), "s": ["a", "b", "c"] * 10, "n": [float(i) for i in range(30)]})
+    types = {"id": "integer", "s": "categorical", "n": "float"}
+    confirmed = confirm_schema(df, types, key_columns=["id"], dataset_name="t")
+    return confirmed, profile_dataset(confirmed.confirmed_df, types)
+
+
+def test_rules_that_cannot_run_are_reported_as_errors_not_failures_or_crashes():
+    from dq_framework.expectations import ExpectationSpec
+
+    confirmed, profile = _small_validation_setup()
+    outcomes = pipeline.run_validation(
+        confirmed.confirmed_df,
+        confirmed.schema,
+        profile,
+        [
+            ExpectationSpec("regex", "s", {"regex": "("}),  # invalid pattern
+            ExpectationSpec("not_null", "ghost"),  # column doesn't exist
+            ExpectationSpec("between", "n", {}),  # no bounds: can't even be built
+            ExpectationSpec("unique", "s"),  # runs fine and fails for real
+        ],
+    )
+    by_status = {}
+    for o in outcomes:
+        by_status.setdefault(o.status, []).append((o.expectation_type.removeprefix("expect_"), o.column))
+    assert sorted(by_status["ERROR"]) == [
+        ("column_values_to_be_between", "n"),
+        ("column_values_to_match_regex", "s"),
+        ("column_values_to_not_be_null", "ghost"),
+    ]
+    assert ("column_values_to_be_unique", "s") in by_status["FAIL"]
+    assert all(o.error and o.source == "custom" for o in outcomes if o.status == "ERROR")
+
+    recs = build_recommendations([], 30, validation_outcomes=outcomes)
+    could_not_run = [r for r in recs if r.issue == "Validation rule could not run"]
+    assert len(could_not_run) == 3
+    assert any("Invalid regular expression" in r.finding for r in could_not_run)
+    assert any(r.issue == "Values that should be unique repeat" for r in recs)
+
+
+def test_referential_check_survives_a_type_mismatch_between_the_two_files():
+    df = pd.DataFrame({"code": ["1", "2", "x", None]})
+    types = {"code": "string"}
+    confirmed = confirm_schema(df, types, dataset_name="t")
+    profile = profile_dataset(confirmed.confirmed_df, types)
+    for kind in ("sqlite", "duckdb"):
+        engine = create_engine(kind)
+        try:
+            outcome = pipeline.run_anomaly_detection(
+                confirmed.confirmed_df, confirmed.schema, profile, engine,
+                reference_df=pd.DataFrame({"c": [1, 2, 3]}),  # ints vs. the main file's strings
+                referential_pairs=[("code", "c")],
+            )
+        finally:
+            engine.close()
+        (ref,) = [r for r in outcome.results if r.check_name.startswith("referential")]
+        assert ref.affected_row_count == 1  # only "x" has no match
+
+
+def test_typo_matching_skips_columns_with_too_many_distinct_values():
+    from dq_framework.anomalies.typos import detect_typos, find_typo_groups
+    from dq_framework.constants import MAX_TYPO_DISTINCT_VALUES
+
+    values = [f"value_{i}" for i in range(MAX_TYPO_DISTINCT_VALUES + 50)]
+    df = pd.DataFrame({"c": values})
+    assert find_typo_groups(df["c"]) == {}
+    result = detect_typos(df, {"c": "categorical"})["c"]
+    assert result.passed and "Skipped" in result.summary

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 # Best-effort: disable GX's anonymous usage telemetry before it's imported.
@@ -61,7 +62,7 @@ _FAIL_COLOR = "#f87171"
 
 def _style_result_column(df: pd.DataFrame, column: str = "Result"):
     def _color(val):
-        if val == "FAIL":
+        if val in ("FAIL", "ERROR"):
             return f"color: {_FAIL_COLOR}; font-weight: 600"
         if val == "PASS":
             return f"color: {_PASS_COLOR}; font-weight: 600"
@@ -358,16 +359,36 @@ with tabs[3]:
             value_set = st.text_input("Allowed values, comma-separated (for in_set)", "")
             regex = st.text_input("Regex (for regex)", "")
             if st.form_submit_button("Add rule"):
-                params = {}
-                if min_value:
-                    params["min_value"] = float(min_value)
-                if max_value:
-                    params["max_value"] = float(max_value)
-                if value_set:
+                params, problem = {}, None
+                try:
+                    if min_value.strip():
+                        params["min_value"] = float(min_value)
+                    if max_value.strip():
+                        params["max_value"] = float(max_value)
+                except ValueError:
+                    problem = "Min and max must be numbers."
+                if value_set.strip():
                     params["value_set"] = [v.strip() for v in value_set.split(",")]
-                if regex:
+                if regex.strip():
                     params["regex"] = regex
-                st.session_state.custom_expectations.append(ExpectationSpec(kind, column, params))
+                if problem is None:
+                    if kind == "between" and not ({"min_value", "max_value"} & params.keys()):
+                        problem = "A 'between' rule needs a min value, a max value, or both."
+                    elif kind == "row_count_between" and not ({"min_value", "max_value"} & params.keys()):
+                        problem = "A 'row_count_between' rule needs a min value, a max value, or both."
+                    elif kind == "in_set" and not params.get("value_set"):
+                        problem = "An 'in_set' rule needs at least one allowed value."
+                    elif kind == "regex":
+                        try:
+                            re.compile(params.get("regex", ""))
+                            if not params.get("regex"):
+                                problem = "A 'regex' rule needs a pattern."
+                        except re.error as e:
+                            problem = f"That regex isn't valid: {e}"
+                if problem:
+                    st.error(problem)
+                else:
+                    st.session_state.custom_expectations.append(ExpectationSpec(kind, column, params))
 
         if st.session_state.custom_expectations:
             st.write("Custom rules added:")
@@ -480,7 +501,7 @@ with tabs[3]:
 
         if st.session_state.validation_outcomes is not None:
             rows = [
-                {"Expectation": v.expectation_type, "Column": v.column or "", "Source": v.source, "Result": "PASS" if v.success else "FAIL", "Rows failing": f"{v.unexpected_count:,} ({v.unexpected_percent:.1%})"}
+                {"Expectation": v.expectation_type, "Column": v.column or "", "Source": v.source, "Result": v.status, "Rows failing": "—" if v.error else f"{v.unexpected_count:,} ({v.unexpected_percent:.1%})"}
                 for v in st.session_state.validation_outcomes
             ]
             st.caption(
@@ -488,6 +509,13 @@ with tabs[3]:
                 "whose value also appears on another row, so a value repeated twice counts both rows."
             )
             st.dataframe(_style_result_column(pd.DataFrame(rows)), use_container_width=True)
+            for v in st.session_state.validation_outcomes:
+                if v.error:
+                    st.warning(
+                        f"Rule `{v.expectation_type.removeprefix('expect_')}`"
+                        + (f" on `{v.column}`" if v.column else "")
+                        + f" could not run: {v.error}"
+                    )
 
 # ---------------------------------------------------------------------------
 # Tab 5 — Recommended Actions

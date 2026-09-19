@@ -42,8 +42,9 @@ def _row_count(results, passed: bool) -> int:
     return sum(1 for r in results if r.passed == passed)
 
 
-def _status_span(passed: bool) -> str:
-    return '<span class="pass">PASS</span>' if passed else '<span class="fail">FAIL</span>'
+def _status_span(passed: bool, label: str | None = None) -> str:
+    label = label or ("PASS" if passed else "FAIL")
+    return f'<span class="{"pass" if passed else "fail"}">{label}</span>'
 
 
 def render_html_report(
@@ -94,7 +95,7 @@ def render_html_report(
     validation_rows = "\n".join(
         f"<tr><td>{esc(v.expectation_type)}</td><td>{esc(v.column or '')}</td>"
         f"<td>{esc(describe_params(v.params))}</td><td>{esc(v.source)}</td>"
-        f"<td>{_status_span(v.success)}</td><td>{v.unexpected_count:,}</td>"
+        f"<td>{_status_span(v.success, v.status)}</td><td>{v.unexpected_count:,}</td>"
         f"<td>{v.unexpected_percent:.1%}</td></tr>"
         for v in validation_outcomes
     )

@@ -31,7 +31,7 @@ def detect_referential_integrity(
     sql = (
         f"SELECT m.* FROM {_quote(main_table)} m "
         f"LEFT JOIN {_quote(reference_table)} r "
-        f"ON m.{_quote(main_col)} = r.{_quote(reference_col)} "
+        f"ON CAST(m.{_quote(main_col)} AS VARCHAR) = CAST(r.{_quote(reference_col)} AS VARCHAR) "
         f"WHERE m.{_quote(main_col)} IS NOT NULL AND r.{_quote(reference_col)} IS NULL"
     )
     orphans = engine.execute(sql)

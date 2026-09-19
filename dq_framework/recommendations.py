@@ -112,6 +112,15 @@ def _rule_issue_finding_action(v: ValidationOutcome, n_rows: int) -> tuple[str, 
     """(issue, finding, action) for a failed validation rule. The rule type
     comes from GX's expectation name, e.g. expect_column_values_to_be_unique."""
     col, n, pct = v.column, v.unexpected_count, v.unexpected_percent
+    if v.error:
+        return (
+            "Validation rule could not run",
+            f"Rule '{v.expectation_type.removeprefix('expect_')}'"
+            + (f" on '{col}'" if col else "")
+            + f" was not evaluated: {v.error}",
+            "Fix or remove this rule in the Rules tab (e.g. check the column exists, suits the rule "
+            "type, and the rule's settings are valid), then run validation again.",
+        )
     kind = v.expectation_type.removeprefix("expect_")
     if kind == "column_values_to_not_be_null":
         return (
@@ -234,7 +243,7 @@ def build_recommendations(
 
     anomaly_recs = list(recs)
     for v in validation_outcomes or []:
-        if v.success or _already_reported_by_anomaly_check(v, anomaly_recs):
+        if v.success or (not v.error and _already_reported_by_anomaly_check(v, anomaly_recs)):
             continue
         issue, finding, action = _rule_issue_finding_action(v, n_rows)
         recs.append(

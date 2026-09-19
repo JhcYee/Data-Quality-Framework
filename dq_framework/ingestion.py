@@ -133,6 +133,18 @@ def _load_excel(file_bytes: bytes, ext: str, sheet_name: str | None) -> pd.DataF
         raise IngestionError(f"Could not parse Excel file: {e}") from e
 
 
+def _stringify_nested(df: pd.DataFrame) -> pd.DataFrame:
+    """Lists/dicts left inside cells by json_normalize (arrays, or objects
+    under a list) aren't hashable, which breaks profiling and the SQL layer.
+    Keep them as JSON text so the value is still visible in the audit."""
+    for col in df.columns:
+        if df[col].dtype == object and df[col].map(lambda v: isinstance(v, (list, dict))).any():
+            df[col] = df[col].map(
+                lambda v: json.dumps(v, sort_keys=True, ensure_ascii=False) if isinstance(v, (list, dict)) else v
+            )
+    return df
+
+
 def _load_json(file_bytes: bytes) -> pd.DataFrame:
     text = _decode_bytes(file_bytes)
     try:
@@ -152,18 +164,18 @@ def _load_json(file_bytes: bytes) -> pd.DataFrame:
             raise IngestionError(f"Could not parse JSON: {e}") from e
         if not records:
             raise IngestionError("JSON file contained no records.")
-        return pd.json_normalize(records)
+        return _stringify_nested(pd.json_normalize(records))
 
     if isinstance(data, list):
         if not data:
             raise IngestionError("JSON file contained an empty list.")
-        return pd.json_normalize(data[:_READ_LIMIT])
+        return _stringify_nested(pd.json_normalize(data[:_READ_LIMIT]))
     if isinstance(data, dict):
         # Common real-world shape: {"meta": {...}, "records": [...]}.
         for value in data.values():
             if isinstance(value, list) and value and isinstance(value[0], dict):
-                return pd.json_normalize(value[:_READ_LIMIT])
-        return pd.json_normalize([data])
+                return _stringify_nested(pd.json_normalize(value[:_READ_LIMIT]))
+        return _stringify_nested(pd.json_normalize([data]))
     raise IngestionError("Unsupported JSON structure — expected a list of records.")
 
 

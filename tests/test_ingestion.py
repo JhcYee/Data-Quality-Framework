@@ -105,3 +105,14 @@ def test_xml_xxe_rejected():
 <root><row><a>&xxe;</a></row></root>"""
     with pytest.raises(IngestionError):
         load_file("data.xml", malicious)
+
+
+def test_json_with_list_and_dict_cells_loads_and_profiles():
+    import json
+
+    from dq_framework.profiling import profile_dataset
+
+    data = json.dumps([{"id": 1, "tags": ["a", "b"]}, {"id": 2, "tags": []}, {"id": 3, "tags": None}]).encode()
+    ir = load_file("x.json", data)
+    assert ir.raw_df["tags"].iloc[0] == '["a", "b"]'
+    profile_dataset(ir.raw_df, {c: "string" for c in ir.raw_df.columns})  # was: TypeError unhashable list

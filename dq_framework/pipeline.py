@@ -95,12 +95,26 @@ def run_validation(
         nulls_expected_columns=set(schema.nulls_expected_columns),
         gx_module=gx_module,
     )
+    unbuildable: list[ValidationOutcome] = []
+    built_specs: list[ExpectationSpec] = []
     for spec in custom_expectations or []:
-        expectations.add_manual_expectation(suite, spec.kind, spec.column, spec.params, gx_module=gx_module)
+        try:
+            expectations.add_manual_expectation(suite, spec.kind, spec.column, spec.params, gx_module=gx_module)
+            built_specs.append(spec)
+        except Exception as e:  # noqa: BLE001 - e.g. a range rule with no bounds
+            error = expectations.short_error(e)
+            exp_type = expectations.GX_TYPE_BY_KIND.get(spec.kind, spec.kind)
+            unbuildable.append(
+                ValidationOutcome(
+                    exp_type, spec.column, False, 0, 0.0,
+                    f"{exp_type}" + (f" on '{spec.column}'" if spec.column else "") + f": ERROR ({error})",
+                    dict(spec.params), source="custom", error=error,
+                )
+            )
     result = expectations.validate_suite(context, df, suite, gx_module=gx_module)
     outcomes = expectations.summarize_validation(result)
-    expectations.tag_custom_outcomes(outcomes, custom_expectations or [])
-    return outcomes
+    expectations.tag_custom_outcomes(outcomes, built_specs)
+    return outcomes + unbuildable
 
 
 def generate_reports(

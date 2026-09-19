@@ -69,6 +69,13 @@ class ValidationOutcome:
     params: dict = field(default_factory=dict)
     # "auto-generated" (baseline suite) or "custom" (added by the user).
     source: str = "auto-generated"
+    # Set when the rule couldn't be evaluated at all (bad regex, missing
+    # column, wrong column type, ...) — distinct from "ran and found violations".
+    error: str | None = None
+
+    @property
+    def status(self) -> str:
+        return "ERROR" if self.error else ("PASS" if self.success else "FAIL")
 
 
 _RULE_PARAM_KEYS = ("min_value", "max_value", "value_set", "regex")
@@ -222,6 +229,23 @@ def _get_kwargs(cfg) -> dict:
     return {k: v for k, v in vars(cfg).items() if not k.startswith("_")}
 
 
+def short_error(exc_or_message) -> str:
+    """One readable line from an exception (pydantic's are multi-line) or message."""
+    lines = [ln.strip() for ln in str(exc_or_message).splitlines() if ln.strip()]
+    text = lines[-1] if lines else "unknown error"
+    return text.replace("(type=value_error)", "").strip()[:200]
+
+
+def _raised_error(r) -> str | None:
+    info = getattr(r, "exception_info", None)
+    if not isinstance(info, dict):
+        return None
+    for entry in info.values():
+        if isinstance(entry, dict) and entry.get("raised_exception"):
+            return short_error(entry.get("exception_message"))
+    return None
+
+
 def summarize_validation(result) -> list[ValidationOutcome]:
     """Defensively parses GX's result object — its internal schema has
     shifted across versions historically, so a per-result parse failure
@@ -240,13 +264,23 @@ def summarize_validation(result) -> list[ValidationOutcome]:
             element_count = int(res_dict.get("element_count") or 0)
             unexpected_pct = (unexpected_count / element_count) if element_count else 0.0
             success = bool(r.success)
+            error = _raised_error(r)
         except Exception:  # noqa: BLE001 - defensive parse, never crash the report
             exp_type, column, unexpected_count, unexpected_pct, success = "unknown", None, 0, 0.0, False
             params = {}
+            error = "could not read this rule's result"
 
-        status = "PASS" if success else f"FAIL ({unexpected_count} unexpected, {unexpected_pct:.1%})"
+        if error:
+            success = False
+        status = (
+            f"ERROR ({error})"
+            if error
+            else "PASS" if success else f"FAIL ({unexpected_count} unexpected, {unexpected_pct:.1%})"
+        )
         summary = exp_type + (f" on '{column}'" if column else "") + f": {status}"
         outcomes.append(
-            ValidationOutcome(exp_type, column, success, unexpected_count, unexpected_pct, summary, params)
+            ValidationOutcome(
+                exp_type, column, success, unexpected_count, unexpected_pct, summary, params, error=error
+            )
         )
     return outcomes

@@ -51,3 +51,7 @@ DTYPE_CHOICES = ["string", "integer", "float", "boolean", "datetime", "categoric
 # too-generous distance would still flag two genuinely different short
 # category names as typos of each other.
 MAX_TYPO_EDIT_DISTANCE = 2
+# Typo matching compares distinct values pairwise, so its cost grows with the
+# square of the distinct count. A "categorical" column with more distinct
+# values than this is really free text or an identifier; it is skipped.
+MAX_TYPO_DISTINCT_VALUES = 5000

@@ -89,3 +89,10 @@ def test_find_matching_schema_no_match_returns_none(tmp_path: Path):
     save_confirmed_schema(schema, tmp_path)
     found = find_matching_schema(["totally", "different", "columns"], tmp_path)
     assert found is None
+
+
+def test_coerce_integer_does_not_round_fractions_or_crash_on_out_of_range():
+    series = pd.Series(["1", "2.5", "1e20", "inf", "-inf", "7", None])
+    coerced, n_failures = coerce_column(series, "integer")
+    assert list(coerced.dropna()) == [1, 7]
+    assert n_failures == 4  # 2.5, 1e20, inf, -inf — surfaced, never silently rounded/changed

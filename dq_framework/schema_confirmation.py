@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .constants import DTYPE_CHOICES
@@ -95,12 +96,18 @@ def coerce_column(series: pd.Series, dtype: str) -> tuple[pd.Series, int]:
 
     if dtype in ("integer", "float"):
         numeric = pd.to_numeric(str_series, errors="coerce")
-        n_failures = int((non_null_mask & numeric.isna()).sum())
         if dtype == "integer":
-            coerced = numeric.round().astype("Int64")
-        else:
-            coerced = numeric.astype("float64")
-        return coerced, n_failures
+            # A value only counts as an integer if it is one: fractions are
+            # not silently rounded (an audit doesn't rewrite data), and
+            # infinities / values beyond 64 bits can't be stored. Anything
+            # else becomes null and is reported as a coercion failure.
+            with np.errstate(invalid="ignore"):
+                valid = numeric.notna() & np.isfinite(numeric) & (numeric.abs() < 2**63) & (numeric % 1 == 0)
+            numeric = numeric.where(valid)
+            n_failures = int((non_null_mask & ~valid).sum())
+            return numeric.astype("Int64"), n_failures
+        n_failures = int((non_null_mask & numeric.isna()).sum())
+        return numeric.astype("float64"), n_failures
 
     if dtype == "boolean":
         # pandas' default "str" dtype represents a missing value as a float

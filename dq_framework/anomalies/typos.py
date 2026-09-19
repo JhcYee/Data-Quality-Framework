@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ..constants import MAX_TYPO_EDIT_DISTANCE
+from ..constants import MAX_TYPO_DISTINCT_VALUES, MAX_TYPO_EDIT_DISTANCE
 from .types import AnomalyResult
 
 
@@ -59,6 +59,8 @@ def find_typo_groups(
         return {}
 
     counts = non_null.value_counts()  # sorted most-frequent first
+    if len(counts) > MAX_TYPO_DISTINCT_VALUES:
+        return {}
     values = counts.index.tolist()
 
     assigned: set[str] = set()
@@ -89,6 +91,16 @@ def detect_typos(
     results: dict[str, AnomalyResult] = {}
     for col, dtype in column_types.items():
         if dtype != "categorical" or col not in df.columns:
+            continue
+        n_distinct = df[col].dropna().astype(str).str.strip().str.lower().nunique()
+        if n_distinct > MAX_TYPO_DISTINCT_VALUES:
+            results[col] = AnomalyResult(
+                check_name=f"typos:{col}",
+                passed=True,
+                summary=f"Skipped: {n_distinct:,} distinct values is too many for typo matching "
+                f"(limit {MAX_TYPO_DISTINCT_VALUES:,}) — this column looks like free text or an identifier",
+                affected_row_count=0,
+            )
             continue
         groups = find_typo_groups(df[col])
         col_dismissed = dismissed_variants.get(col, set())

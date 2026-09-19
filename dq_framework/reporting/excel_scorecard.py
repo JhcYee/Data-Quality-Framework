@@ -54,14 +54,15 @@ def build_excel_scorecard(
         label = v.expectation_type + (f" ({v.column})" if v.column else "")
         rule = describe_params(v.params)
         details = v.summary + (f" — rule: {rule}" if rule else "")
-        ws1.append([label, f"validation rule ({v.source})", "PASS" if v.success else "FAIL", v.unexpected_percent, details])
+        ws1.append([label, f"validation rule ({v.source})", v.status, v.unexpected_percent, details])
 
     _style_header(ws1)
     max_row = ws1.max_row
     if max_row > 1:
-        ws1.conditional_formatting.add(
-            f"C2:C{max_row}", CellIsRule(operator="equal", formula=['"FAIL"'], fill=FAIL_FILL)
-        )
+        for failing_label in ('"FAIL"', '"ERROR"'):
+            ws1.conditional_formatting.add(
+                f"C2:C{max_row}", CellIsRule(operator="equal", formula=[failing_label], fill=FAIL_FILL)
+            )
         ws1.conditional_formatting.add(
             f"C2:C{max_row}", CellIsRule(operator="equal", formula=['"PASS"'], fill=PASS_FILL)
         )
