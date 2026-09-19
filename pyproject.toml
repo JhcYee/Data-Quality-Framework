@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dq-framework"
 version = "0.1.0"
-description = "Data Quality & Validation Audit Framework — upload a messy dataset, get a profiled, validated, cleaned dataset back with a full audit trail."
+description = "Data Quality & Validation Audit Framework — upload a messy dataset, get a profiled, validated audit with prioritized recommended actions."
 requires-python = ">=3.10"
 dependencies = [
     "streamlit>=1.38",

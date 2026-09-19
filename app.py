@@ -20,14 +20,13 @@ import streamlit as st
 from dq_framework import expectations, pipeline
 from dq_framework.anomalies import consistency
 from dq_framework.anomalies.typos import find_typo_groups
-from dq_framework.cleaning import NULL_STRATEGIES, CleaningOptions
 from dq_framework.constants import DTYPE_CHOICES
 from dq_framework.expectations import EXPECTATION_KINDS, ExpectationSpec
 from dq_framework.ingestion import IngestionError, get_extension, list_excel_sheets, load_file
 from dq_framework.profiling import profile_dataset
+from dq_framework.recommendations import build_recommendations
 from dq_framework.schema_confirmation import (
     ConfirmedSchema,
-    coerce_custom_value,
     confirm_schema,
     find_matching_schema,
     save_confirmed_schema,
@@ -85,8 +84,6 @@ def _init_state():
         "dismissed_typo_variants": {},
         "sql_engine_override": "auto",
         "validation_outcomes": None,
-        "cleaning_result": None,
-        "profile_after": None,
         "reports": None,
     }
     for k, v in defaults.items():
@@ -98,10 +95,10 @@ _init_state()
 st.title("Data Quality & Validation Audit Framework")
 st.caption(
     "Upload a messy dataset → confirm its schema → review anomalies → tune validation rules → "
-    "clean it → download a full audit trail. Runs entirely locally, no data leaves your machine."
+    "review the recommended actions → download a full audit trail. Runs entirely locally, no data leaves your machine."
 )
 
-tabs = st.tabs(["1. Upload", "2. Confirm Schema", "3. Profile & Anomalies", "4. Rules", "5. Clean", "6. Report"])
+tabs = st.tabs(["1. Upload", "2. Confirm Schema", "3. Profile & Anomalies", "4. Rules", "5. Recommended Actions", "6. Report"])
 
 # ---------------------------------------------------------------------------
 # Tab 1 — Upload
@@ -134,7 +131,7 @@ with tabs[0]:
                 st.session_state.ingestion_result = result
                 st.session_state.filename = uploaded.name
                 # Uploading a new main file invalidates everything downstream.
-                for k in ("schema_result", "anomaly_outcome", "validation_outcomes", "cleaning_result", "profile_after", "reports"):
+                for k in ("schema_result", "anomaly_outcome", "validation_outcomes", "reports"):
                     st.session_state[k] = None
                 st.session_state.dismissed_typo_variants = {}
                 st.success(f"Loaded {uploaded.name}: {len(result.raw_df):,} rows × {len(result.raw_df.columns)} columns")
@@ -232,7 +229,7 @@ with tabs[1]:
             )
             st.session_state.schema_result = result
             st.session_state.profile_before = _cached_profile(result.confirmed_df, column_types)
-            for k in ("anomaly_outcome", "validation_outcomes", "cleaning_result", "profile_after", "reports"):
+            for k in ("anomaly_outcome", "validation_outcomes", "reports"):
                 st.session_state[k] = None
             st.session_state.dismissed_typo_variants = {}
             if save_for_next_time:
@@ -284,6 +281,7 @@ with tabs[2]:
             finally:
                 engine.close()
             st.session_state.anomaly_outcome = outcome
+            st.session_state.reports = None
 
         outcome = st.session_state.anomaly_outcome
         if outcome is not None:
@@ -435,6 +433,7 @@ with tabs[3]:
             finally:
                 engine.close()
             st.session_state.anomaly_outcome = outcome
+            st.session_state.reports = None
 
             gx_mod = _gx_module()
             st.session_state.validation_outcomes = pipeline.run_validation(
@@ -454,118 +453,68 @@ with tabs[3]:
             st.dataframe(_style_result_column(pd.DataFrame(rows)), use_container_width=True)
 
 # ---------------------------------------------------------------------------
-# Tab 5 — Clean
+# Tab 5 — Recommended Actions
 # ---------------------------------------------------------------------------
+def _current_recommendations():
+    sr = st.session_state.schema_result
+    outcome = st.session_state.anomaly_outcome
+    ir = st.session_state.ingestion_result
+    return build_recommendations(
+        outcome.results,
+        sr.confirmed_df.shape[0],
+        coercion_failure_counts=sr.coercion_failure_counts,
+        sentinel_null_counts=ir.sentinel_null_counts if ir else None,
+    )
+
+
 with tabs[4]:
-    st.header("Clean")
+    st.header("Recommended actions")
     sr = st.session_state.schema_result
     outcome = st.session_state.anomaly_outcome
     if sr is None or outcome is None:
         st.info("Run anomaly detection first.")
     else:
-        c1, c2 = st.columns(2)
-        with c1:
-            drop_exact_duplicates = st.checkbox("Drop exact duplicate rows", value=True)
-            drop_key_duplicates = st.checkbox("Drop (rather than flag) duplicate-key rows", value=False)
-            apply_categorical_standardization = st.checkbox("Standardize categorical case/whitespace variants", value=True)
-        with c2:
-            outlier_action = st.radio("Outlier handling", ["flag", "cap", "drop"], horizontal=True)
-            null_strategy = st.radio(
-                "Null handling",
-                NULL_STRATEGIES,
-                horizontal=True,
-                captions=[
-                    "median / mode per column",
-                    "numeric columns only",
-                    "text columns only",
-                    "type in a value",
-                    "leave null, no imputation",
-                ],
-            )
-
-        null_custom_value = None
-        if null_strategy == "custom":
-            null_custom_value = st.text_input(
-                "Fill value", help="Validated against each column's confirmed dtype before it's used."
-            )
-            if null_custom_value:
-                preview_rows = []
-                for col, dtype in sr.schema.column_types.items():
-                    coerced, ok = coerce_custom_value(null_custom_value, dtype)
-                    preview_rows.append(
-                        {
-                            "Column": col,
-                            "Dtype": dtype,
-                            "Valid for this dtype?": "Yes" if ok else "No — falls back to auto",
-                            "Would store": repr(coerced) if ok else "",
-                        }
-                    )
-                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
-
-        options = CleaningOptions(
-            key_columns=sr.schema.key_columns,
-            drop_exact_duplicates=drop_exact_duplicates,
-            drop_key_duplicates=drop_key_duplicates,
-            apply_categorical_standardization=apply_categorical_standardization,
-            outlier_action=outlier_action,
-            null_strategy_overrides=(
-                {col: null_strategy for col in sr.confirmed_df.columns} if null_strategy != "auto" else {}
-            ),
-            null_custom_value=null_custom_value,
+        recs = _current_recommendations()
+        st.caption(
+            "This tool audits your data — it never changes it. Each finding below says what was "
+            "found, how many rows it touches, and what to do about it; the fix itself is up to you, "
+            "since it usually depends on what the data means. Ordered by rows affected."
         )
-
-        if st.button("Apply cleaning", type="primary"):
-            previous_schema = find_matching_schema(list(sr.confirmed_df.columns), SCHEMAS_DIR)
-            if previous_schema and previous_schema.column_types == sr.schema.column_types:
-                previous_schema = None
-            result = pipeline.run_cleaning(
-                sr.confirmed_df,
-                sr.schema,
-                options,
-                referential_flag_indices=outcome.referential_flag_indices,
-                consistency_flag_indices=outcome.consistency_flag_indices,
-                typo_flag_indices=outcome.typo_flag_indices,
-                previous_schema=previous_schema,
-            )
-            st.session_state.cleaning_result = result
-            st.session_state.profile_after = _cached_profile(result.cleaned_df, sr.schema.column_types)
-            st.session_state.reports = None
-            st.success(f"Cleaning applied: {len(result.log)} transformations.")
-
-        cr = st.session_state.cleaning_result
-        if cr is not None:
-            before_rows = st.session_state.profile_before.n_rows
-            after_rows = len(cr.cleaned_df)
-            c1, c2 = st.columns(2)
-            c1.metric("Rows before", f"{before_rows:,}")
-            c2.metric("Rows after", f"{after_rows:,}", delta=after_rows - before_rows)
-
-            st.subheader("Transformation log")
-            log_rows = [
-                {"Column": e.column or "(table-level)", "Change": e.change_type, "Before": e.before_summary, "After": e.after_summary, "Why": e.reason}
-                for e in cr.log
-            ]
+        if not recs:
+            st.success("No data quality issues were found.")
+        else:
+            st.metric("Recommended actions", len(recs))
             st.dataframe(
-                pd.DataFrame(log_rows),
+                pd.DataFrame(
+                    [
+                        {
+                            "Column": r.column or "(table-level)",
+                            "Issue": r.issue,
+                            "Rows affected": r.affected_rows,
+                            "% of rows": f"{r.pct_of_rows:.1%}",
+                            "Why it was flagged": r.finding,
+                            "Recommended action": r.action,
+                        }
+                        for r in recs
+                    ]
+                ),
                 use_container_width=True,
+                hide_index=True,
                 column_config={
-                    "Before": st.column_config.Column(width=180),
-                    "After": st.column_config.Column(width=180),
-                    "Why": st.column_config.Column(width=950),
+                    "Column": st.column_config.Column(width=160),
+                    "Issue": st.column_config.Column(width=220),
+                    "Why it was flagged": st.column_config.Column(width=700),
+                    "Recommended action": st.column_config.Column(width=900),
                 },
             )
-
-            st.subheader("Cleaned data (first 10 rows)")
-            st.dataframe(cr.cleaned_df.head(10))
 
 # ---------------------------------------------------------------------------
 # Tab 6 — Report
 # ---------------------------------------------------------------------------
 with tabs[5]:
     st.header("Report & downloads")
-    cr = st.session_state.cleaning_result
-    if cr is None:
-        st.info("Apply cleaning first.")
+    if st.session_state.schema_result is None or st.session_state.anomaly_outcome is None:
+        st.info("Run anomaly detection first.")
     else:
         if st.button("Generate reports", type="primary") or st.session_state.reports is not None:
             if st.session_state.reports is None:
@@ -574,18 +523,15 @@ with tabs[5]:
                     dataset_name,
                     st.session_state.anomaly_outcome.results,
                     st.session_state.validation_outcomes or [],
-                    cr.log,
+                    _current_recommendations(),
                     st.session_state.profile_before,
-                    cr.cleaned_df,
-                    after_profile=st.session_state.profile_after,
                 )
 
             reports = st.session_state.reports
-            c1, c2, c3, c4 = st.columns(4)
-            c1.download_button("cleaned_dataset.csv", reports["cleaned_dataset.csv"], "cleaned_dataset.csv", "text/csv")
-            c2.download_button("changelog.md", reports["changelog.md"], "changelog.md", "text/markdown")
-            c3.download_button("dq_report.html", reports["dq_report.html"], "dq_report.html", "text/html")
-            c4.download_button(
+            c1, c2, c3 = st.columns(3)
+            c1.download_button("recommended_actions.md", reports["recommended_actions.md"], "recommended_actions.md", "text/markdown")
+            c2.download_button("dq_report.html", reports["dq_report.html"], "dq_report.html", "text/html")
+            c3.download_button(
                 "dq_scorecard.xlsx",
                 reports["dq_scorecard.xlsx"],
                 "dq_scorecard.xlsx",

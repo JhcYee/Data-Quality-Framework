@@ -4,9 +4,9 @@ everything downstream (profiling, both SQL engines, outlier detection, the
 GX baseline suite) reads from.
 
 Values that fail to coerce under the *confirmed* type become null and are
-counted as a coercion-failure anomaly right here. By the time Cleaning runs
-later in the pipeline, those are already ordinary nulls — Cleaning has no
-separate "resolve coercion failures" step.
+counted as a coercion-failure right here, and reported as a recommended
+action rather than silently dropped. Downstream checks then see them as
+ordinary nulls.
 
 "categorical" is tracked as our own semantic tag (not pandas' Categorical
 dtype, which raises on values outside a fixed category set — too brittle for
@@ -117,26 +117,6 @@ def coerce_column(series: pd.Series, dtype: str) -> tuple[pd.Series, int]:
         return coerced, n_failures
 
     raise AssertionError("unreachable")  # pragma: no cover
-
-
-def coerce_custom_value(value: str, dtype: str) -> tuple[object, bool]:
-    """Validates a single user-entered value (e.g. a custom null-fill value
-    typed into the Clean tab) against a column's confirmed dtype, reusing
-    coerce_column's exact per-dtype coercion logic on a one-element Series
-    rather than re-implementing type parsing. Returns (coerced_value, ok) —
-    ok is False if the value can't be represented as that dtype."""
-    series = pd.Series([value], dtype="object")
-    coerced, n_failures = coerce_column(series, dtype)
-    if n_failures:
-        return None, False
-    result = coerced.iloc[0]
-    if hasattr(result, "item"):
-        # Convert numpy scalars (np.int64, np.float64, np.bool_) to plain
-        # Python types so they display cleanly (e.g. `0` not `np.int64(0)`)
-        # in the changelog and UI — pd.Timestamp has no .item(), so
-        # datetime values pass through untouched.
-        result = result.item()
-    return result, True
 
 
 def confirm_schema(

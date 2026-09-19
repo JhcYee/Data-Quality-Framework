@@ -10,9 +10,9 @@ import html
 from datetime import datetime, timezone
 
 from ..anomalies.types import AnomalyResult
-from ..cleaning import TransformationLogEntry
 from ..expectations import ValidationOutcome
 from ..profiling import DatasetProfile
+from ..recommendations import Recommendation
 
 CSS = """
 :root { color-scheme: light dark; }
@@ -47,9 +47,8 @@ def render_html_report(
     dataset_name: str,
     anomaly_results: list[AnomalyResult],
     validation_outcomes: list[ValidationOutcome],
-    transformation_log: list[TransformationLogEntry],
-    before_profile: DatasetProfile,
-    after_profile: DatasetProfile | None = None,
+    recommendations: list[Recommendation],
+    profile: DatasetProfile,
 ) -> str:
     esc = html.escape
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -61,11 +60,11 @@ def render_html_report(
 
     cards = f"""
     <div class="grid">
-      <div class="card"><div class="label">Rows (before)</div><div class="value">{before_profile.n_rows:,}</div></div>
-      <div class="card"><div class="label">Rows (after)</div><div class="value">{(after_profile.n_rows if after_profile else before_profile.n_rows):,}</div></div>
+      <div class="card"><div class="label">Rows</div><div class="value">{profile.n_rows:,}</div></div>
+      <div class="card"><div class="label">Columns</div><div class="value">{profile.n_columns}</div></div>
       <div class="card"><div class="label">Anomaly checks passed</div><div class="value">{n_pass}/{n_pass + n_fail}</div></div>
       <div class="card"><div class="label">Validation rules passed</div><div class="value">{n_exp_pass}/{n_exp_pass + n_exp_fail}</div></div>
-      <div class="card"><div class="label">Changes applied</div><div class="value">{len(transformation_log)}</div></div>
+      <div class="card"><div class="label">Recommended actions</div><div class="value">{len(recommendations)}</div></div>
     </div>
     """
 
@@ -82,18 +81,17 @@ def render_html_report(
         for v in validation_outcomes
     )
 
-    changelog_rows = "\n".join(
-        f"<tr><td>{esc(e.column or '(table-level)')}</td>"
-        f"<td>{esc(e.change_type.replace('_', ' '))}</td><td>{esc(e.reason)}</td></tr>"
-        for e in transformation_log
+    action_rows = "\n".join(
+        f"<tr><td>{esc(r.column or '(table-level)')}</td><td>{esc(r.issue)}</td>"
+        f"<td>{(f'{r.affected_rows:,} ({r.pct_of_rows:.1%})' if r.affected_rows else '—')}</td>"
+        f"<td>{esc(r.finding)}</td><td>{esc(r.action)}</td></tr>"
+        for r in recommendations
     )
 
     profile_rows = "\n".join(
         f"<tr><td>{esc(col)}</td><td>{esc(b.dtype)}</td>"
-        f"<td>{b.null_pct:.1%}</td>"
-        f"<td>{(after_profile.columns[col].null_pct if after_profile and col in after_profile.columns else b.null_pct):.1%}</td>"
-        f"<td>{b.unique_pct:.1%}</td></tr>"
-        for col, b in before_profile.columns.items()
+        f"<td>{b.null_pct:.1%}</td><td>{b.unique_pct:.1%}</td></tr>"
+        for col, b in profile.columns.items()
     )
 
     return f"""<!DOCTYPE html>
@@ -126,17 +124,18 @@ def render_html_report(
   </section>
 
   <section>
-    <h2>Cleaning Changelog</h2>
+    <h2>Recommended Actions</h2>
+    <p class="subtitle">Ordered by rows affected. Nothing in the uploaded data has been changed.</p>
     <table>
-      <thead><tr><th>Column</th><th>Change</th><th>Why</th></tr></thead>
-      <tbody>{changelog_rows or '<tr><td colspan="3">No changes were made.</td></tr>'}</tbody>
+      <thead><tr><th>Column</th><th>Issue</th><th>Rows affected</th><th>Why it was flagged</th><th>Recommended action</th></tr></thead>
+      <tbody>{action_rows or '<tr><td colspan="5">No data quality issues were found.</td></tr>'}</tbody>
     </table>
   </section>
 
   <section>
-    <h2>Column Profile (before → after null %)</h2>
+    <h2>Column Profile</h2>
     <table>
-      <thead><tr><th>Column</th><th>Dtype</th><th>Null % (before)</th><th>Null % (after)</th><th>Unique %</th></tr></thead>
+      <thead><tr><th>Column</th><th>Dtype</th><th>Null %</th><th>Unique %</th></tr></thead>
       <tbody>{profile_rows}</tbody>
     </table>
   </section>

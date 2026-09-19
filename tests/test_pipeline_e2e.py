@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 
 from dq_framework import expectations, pipeline
-from dq_framework.cleaning import CleaningOptions
 from dq_framework.ingestion import load_file
 from dq_framework.profiling import profile_dataset
+from dq_framework.recommendations import build_recommendations
 from dq_framework.schema_confirmation import coerce_column, confirm_schema
 from dq_framework.sql_engine import SQLiteEngine, select_engine_kind, create_engine
 from tests.fixtures.generate_messy import generate_borough_reference_df, generate_messy_df
@@ -30,7 +30,7 @@ COLUMN_TYPES = {
 
 def _run_pipeline(df: pd.DataFrame, engine_kind: str = "sqlite"):
     confirmed = confirm_schema(df, COLUMN_TYPES, key_columns=["id"], dataset_name="messy_sample")
-    profile_before = profile_dataset(confirmed.confirmed_df, COLUMN_TYPES)
+    profile = profile_dataset(confirmed.confirmed_df, COLUMN_TYPES)
 
     engine = create_engine(engine_kind)
     try:
@@ -40,7 +40,7 @@ def _run_pipeline(df: pd.DataFrame, engine_kind: str = "sqlite"):
         outcome = pipeline.run_anomaly_detection(
             confirmed.confirmed_df,
             confirmed.schema,
-            profile_before,
+            profile,
             engine,
             reference_df=reference_df,
             referential_pairs=[("borough_code", "code")],
@@ -49,45 +49,36 @@ def _run_pipeline(df: pd.DataFrame, engine_kind: str = "sqlite"):
     finally:
         engine.close()
 
-    cleaning_result = pipeline.run_cleaning(
-        confirmed.confirmed_df,
-        confirmed.schema,
-        CleaningOptions(key_columns=["id"]),
-        referential_flag_indices=outcome.referential_flag_indices,
-        consistency_flag_indices=outcome.consistency_flag_indices,
-        typo_flag_indices=outcome.typo_flag_indices,
+    recommendations = build_recommendations(
+        outcome.results, len(confirmed.confirmed_df), coercion_failure_counts=confirmed.coercion_failure_counts
     )
-    profile_after = profile_dataset(cleaning_result.cleaned_df, COLUMN_TYPES)
-
-    return confirmed, profile_before, outcome, cleaning_result, profile_after
+    return confirmed, profile, outcome, recommendations
 
 
 def test_full_pipeline_small_fixture():
     ir = load_file("messy_sample.csv", FIXTURE.read_bytes())
-    confirmed, profile_before, outcome, cleaning_result, profile_after = _run_pipeline(ir.raw_df)
+    confirmed, profile, outcome, recommendations = _run_pipeline(ir.raw_df)
 
     assert any(not r.passed for r in outcome.results)  # the fixture is deliberately messy
-    assert len(cleaning_result.log) > 0
-    assert cleaning_result.cleaned_df["age"].isna().sum() == 0
+    assert len(recommendations) > 0
 
-    assert any(r.check_name == "typos:borough" for r in outcome.results)
-    assert "_typo_suspected" in cleaning_result.cleaned_df.columns
-    assert cleaning_result.cleaned_df["_typo_suspected"].sum() >= 1
-    # Flagged, never rewritten — the misspelling itself must still be present.
-    assert "Qeens" in cleaning_result.cleaned_df["borough"].values
+    issues = {r.issue for r in recommendations}
+    assert {"Duplicate rows", "Missing values", "Possible typos", "Referential integrity break"} <= issues
 
-    reports = pipeline.generate_reports(
-        "messy_sample",
-        outcome.results,
-        [],
-        cleaning_result.log,
-        profile_before,
-        cleaning_result.cleaned_df,
-        after_profile=profile_after,
-    )
-    for name in ("cleaned_dataset.csv", "changelog.md", "dq_report.html", "dq_scorecard.xlsx"):
-        assert name in reports
-        assert len(reports[name]) > 0
+    reports = pipeline.generate_reports("messy_sample", outcome.results, [], recommendations, profile)
+    assert set(reports) == {"recommended_actions.md", "dq_report.html", "dq_scorecard.xlsx"}
+    assert all(len(data) > 0 for data in reports.values())
+    assert "Qeens" in reports["dq_report.html"].decode() or "qeens" in reports["dq_report.html"].decode()
+
+
+def test_audit_never_modifies_the_confirmed_data():
+    """The tool audits; running the whole pipeline must leave the data it was
+    given exactly as it found it."""
+    ir = load_file("messy_sample.csv", FIXTURE.read_bytes())
+    confirmed = confirm_schema(ir.raw_df, COLUMN_TYPES, key_columns=["id"], dataset_name="messy_sample")
+    before = confirmed.confirmed_df.copy()
+    _run_pipeline(ir.raw_df)
+    pd.testing.assert_frame_equal(confirmed.confirmed_df, before)
 
 
 def test_gx_baseline_suite_does_not_trivially_pass_everything():
@@ -141,23 +132,13 @@ def test_pipeline_at_scale():
     engine_kind = select_engine_kind(len(df), df.memory_usage(deep=True).sum())
     assert engine_kind == "duckdb"  # crosses the auto-select threshold
 
-    confirmed, profile_before, outcome, cleaning_result, profile_after = _run_pipeline(df, engine_kind=engine_kind)
+    confirmed, profile, outcome, recommendations = _run_pipeline(df, engine_kind=engine_kind)
     elapsed = time.time() - start
 
-    assert len(cleaning_result.cleaned_df) <= len(df)
-    assert cleaning_result.cleaned_df["age"].isna().sum() == 0
-    assert not cleaning_result.cleaned_df["id"].duplicated().any() or "_duplicate_key" in cleaning_result.cleaned_df.columns
+    assert len(recommendations) > 0
+    assert any(r.issue == "Duplicate keys" for r in recommendations)
 
-    reports = pipeline.generate_reports(
-        "scale_test",
-        outcome.results,
-        [],
-        cleaning_result.log,
-        profile_before,
-        cleaning_result.cleaned_df,
-        after_profile=profile_after,
-    )
-    for name in ("cleaned_dataset.csv", "changelog.md", "dq_report.html", "dq_scorecard.xlsx"):
-        assert len(reports[name]) > 0
+    reports = pipeline.generate_reports("scale_test", outcome.results, [], recommendations, profile)
+    assert all(len(data) > 0 for data in reports.values())
 
     assert elapsed < 300, f"pipeline took {elapsed:.1f}s at {n_rows} rows — investigate before shipping"

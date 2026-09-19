@@ -4,8 +4,8 @@ case/whitespace variants together would be wrong (e.g. collapsing distinct
 complaint-description sentences that happen to share casing quirks).
 
 Groups values that are identical once lowercased and stripped, and suggests
-the most frequent variant in each group as the canonical form — Cleaning
-applies the suggestion, never silently.
+the most frequent variant in each group as the canonical form. The tool only
+reports this; it never rewrites the data.
 """
 
 from __future__ import annotations

@@ -4,8 +4,7 @@ stays in pandas rather than the SQL layer.
 compute_outlier_bounds is shared with expectations.py's auto-generated
 baseline suite (same IQR_MULTIPLIER), so an outlier flag here and a baseline
 range-expectation failure there agree on the same rows instead of silently
-disagreeing. cleaning.py also imports this to build the `_is_outlier` flag
-column.
+disagreeing.
 
 Skips columns with too few distinct values — a 1-5 rating or a 0/1 flag
 confirmed as "integer" isn't a continuous measurement, and IQR fences on a

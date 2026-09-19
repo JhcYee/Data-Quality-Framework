@@ -1,5 +1,6 @@
 """Excel dashboard: Sheet 1 rule pass/fail + % records affected per rule;
-Sheet 2 column profile before/after, with conditional formatting.
+Sheet 2 recommended actions; Sheet 3 column profile, with conditional
+formatting.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from ..anomalies.types import AnomalyResult
 from ..expectations import ValidationOutcome
 from ..profiling import DatasetProfile
+from ..recommendations import Recommendation
 
 HEADER_FILL = PatternFill(start_color="1F2933", end_color="1F2933", fill_type="solid")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
@@ -35,15 +37,15 @@ def _autofit(ws):
 def build_excel_scorecard(
     anomaly_results: list[AnomalyResult],
     validation_outcomes: list[ValidationOutcome],
-    before_profile: DatasetProfile,
-    after_profile: DatasetProfile | None = None,
+    recommendations: list[Recommendation],
+    profile: DatasetProfile,
 ) -> bytes:
     wb = Workbook()
 
     ws1 = wb.active
     ws1.title = "Rule Summary"
     ws1.append(["Check", "Type", "Result", "% Records Affected", "Details"])
-    total_rows = before_profile.n_rows or 1
+    total_rows = profile.n_rows or 1
 
     for r in anomaly_results:
         pct = r.affected_row_count / total_rows
@@ -66,28 +68,27 @@ def build_excel_scorecard(
             cell.number_format = "0.0%"
     _autofit(ws1)
 
-    ws2 = wb.create_sheet("Column Profile")
-    ws2.append(
-        ["Column", "Dtype", "Null % (before)", "Null % (after)", "Unique % (before)", "Unique % (after)"]
-    )
-    for col, b in before_profile.columns.items():
-        a = after_profile.columns.get(col) if after_profile else None
+    ws2 = wb.create_sheet("Recommended Actions")
+    ws2.append(["Column", "Issue", "Rows affected", "% of rows", "Why it was flagged", "Recommended action"])
+    for rec in recommendations:
         ws2.append(
-            [
-                col,
-                b.dtype,
-                b.null_pct,
-                a.null_pct if a else None,
-                b.unique_pct,
-                a.unique_pct if a else None,
-            ]
+            [rec.column or "(table-level)", rec.issue, rec.affected_rows, rec.pct_of_rows, rec.finding, rec.action]
         )
     _style_header(ws2)
-    for row in ws2.iter_rows(min_row=2, min_col=3, max_col=6):
+    for row in ws2.iter_rows(min_row=2, min_col=4, max_col=4):
         for cell in row:
-            if cell.value is not None:
-                cell.number_format = "0.0%"
+            cell.number_format = "0.0%"
     _autofit(ws2)
+
+    ws3 = wb.create_sheet("Column Profile")
+    ws3.append(["Column", "Dtype", "Null %", "Unique %"])
+    for col, c in profile.columns.items():
+        ws3.append([col, c.dtype, c.null_pct, c.unique_pct])
+    _style_header(ws3)
+    for row in ws3.iter_rows(min_row=2, min_col=3, max_col=4):
+        for cell in row:
+            cell.number_format = "0.0%"
+    _autofit(ws3)
 
     buf = io.BytesIO()
     wb.save(buf)
