@@ -64,6 +64,57 @@ class ValidationOutcome:
     unexpected_count: int
     unexpected_percent: float
     summary: str
+    # The rule's own settings (range bounds, allowed values, regex), kept so a
+    # failure can be explained in terms of what the rule actually required.
+    params: dict = field(default_factory=dict)
+    # "auto-generated" (baseline suite) or "custom" (added by the user).
+    source: str = "auto-generated"
+
+
+_RULE_PARAM_KEYS = ("min_value", "max_value", "value_set", "regex")
+
+# GX's name for each rule kind the UI offers.
+GX_TYPE_BY_KIND = {
+    "not_null": "expect_column_values_to_not_be_null",
+    "unique": "expect_column_values_to_be_unique",
+    "between": "expect_column_values_to_be_between",
+    "in_set": "expect_column_values_to_be_in_set",
+    "regex": "expect_column_values_to_match_regex",
+    "row_count_between": "expect_table_row_count_to_be_between",
+}
+
+
+def describe_params(params: dict, limit: int = 6) -> str:
+    """The rule's settings as short readable text, e.g. 'between 0 and 120'."""
+    if "value_set" in params:
+        values = list(params["value_set"])
+        shown = ", ".join(repr(v) for v in values[:limit]) + (", ..." if len(values) > limit else "")
+        return f"one of {shown}"
+    if "regex" in params:
+        return f"matches {params['regex']!r}"
+    if "min_value" in params or "max_value" in params:
+        lo, hi = params.get("min_value"), params.get("max_value")
+        return f"between {'-inf' if lo is None else f'{lo:g}'} and {'inf' if hi is None else f'{hi:g}'}"
+    return ""
+
+
+def tag_custom_outcomes(outcomes: list["ValidationOutcome"], custom_specs: list[ExpectationSpec]) -> None:
+    """Marks the outcomes that came from user-added rules. GX doesn't return
+    results in the order rules were added, so each custom rule is matched to
+    its outcome by type, column and settings; a rule that finds no match is
+    simply left untagged rather than risk mislabeling another one.
+    """
+    for spec in custom_specs:
+        wanted = {k: v for k, v in spec.params.items() if k in _RULE_PARAM_KEYS and v is not None}
+        for outcome in outcomes:
+            if (
+                outcome.source != "custom"
+                and outcome.expectation_type == GX_TYPE_BY_KIND.get(spec.kind)
+                and outcome.column == spec.column
+                and outcome.params == wanted
+            ):
+                outcome.source = "custom"
+                break
 
 
 def build_baseline_suite(
@@ -181,7 +232,9 @@ def summarize_validation(result) -> list[ValidationOutcome]:
         try:
             cfg = r.expectation_config
             exp_type = _get_expectation_type(cfg)
-            column = _get_kwargs(cfg).get("column")
+            kwargs = _get_kwargs(cfg)
+            column = kwargs.get("column")
+            params = {k: kwargs[k] for k in _RULE_PARAM_KEYS if kwargs.get(k) is not None}
             res_dict = dict(r.result) if r.result else {}
             unexpected_count = int(res_dict.get("unexpected_count") or 0)
             element_count = int(res_dict.get("element_count") or 0)
@@ -189,10 +242,11 @@ def summarize_validation(result) -> list[ValidationOutcome]:
             success = bool(r.success)
         except Exception:  # noqa: BLE001 - defensive parse, never crash the report
             exp_type, column, unexpected_count, unexpected_pct, success = "unknown", None, 0, 0.0, False
+            params = {}
 
         status = "PASS" if success else f"FAIL ({unexpected_count} unexpected, {unexpected_pct:.1%})"
         summary = exp_type + (f" on '{column}'" if column else "") + f": {status}"
         outcomes.append(
-            ValidationOutcome(exp_type, column, success, unexpected_count, unexpected_pct, summary)
+            ValidationOutcome(exp_type, column, success, unexpected_count, unexpected_pct, summary, params)
         )
     return outcomes

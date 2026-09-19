@@ -71,6 +71,36 @@ def test_full_pipeline_small_fixture():
     assert "Qeens" in reports["dq_report.html"].decode() or "qeens" in reports["dq_report.html"].decode()
 
 
+def test_failed_gx_rules_show_up_as_recommended_actions():
+    """End to end through real Great Expectations: a rule the user adds (email
+    must be unique) fails, and that failure appears in the recommendations."""
+    df = pd.DataFrame(
+        {
+            "id": [1, 2, 3, 4],
+            "email": ["a@x.com", "b@x.com", "a@x.com", "c@x.com"],
+            "status": ["ok", "ok", "ok", "ok"],
+        }
+    )
+    types = {"id": "integer", "email": "string", "status": "categorical"}
+    confirmed = confirm_schema(df, types, key_columns=["id"], dataset_name="t")
+    profile = profile_dataset(confirmed.confirmed_df, types)
+    outcomes = pipeline.run_validation(
+        confirmed.confirmed_df,
+        confirmed.schema,
+        profile,
+        [expectations.ExpectationSpec("unique", "email")],
+    )
+    # Only the custom rule is tagged custom; the auto-generated ones aren't.
+    assert [(o.expectation_type, o.column) for o in outcomes if o.source == "custom"] == [
+        ("expect_column_values_to_be_unique", "email")
+    ]
+    assert sum(o.source == "auto-generated" for o in outcomes) == len(outcomes) - 1
+    recs = build_recommendations([], len(df), validation_outcomes=outcomes)
+    (rec,) = recs
+    assert (rec.column, rec.issue) == ("email", "Values that should be unique repeat")
+    assert rec.affected_rows == 2  # both rows sharing a@x.com
+
+
 def test_audit_never_modifies_the_confirmed_data():
     """The tool audits; running the whole pipeline must leave the data it was
     given exactly as it found it."""

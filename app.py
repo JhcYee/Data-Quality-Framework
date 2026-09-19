@@ -19,6 +19,7 @@ import streamlit as st
 
 from dq_framework import expectations, pipeline
 from dq_framework.anomalies import consistency
+from dq_framework.anomaly_sections import group_anomaly_results
 from dq_framework.anomalies.typos import find_typo_groups
 from dq_framework.constants import DTYPE_CHOICES
 from dq_framework.expectations import EXPECTATION_KINDS, ExpectationSpec
@@ -134,6 +135,8 @@ with tabs[0]:
                 for k in ("schema_result", "anomaly_outcome", "validation_outcomes", "reports"):
                     st.session_state[k] = None
                 st.session_state.dismissed_typo_variants = {}
+                # Custom rules name columns of the previous file — they don't carry over.
+                st.session_state.custom_expectations = []
                 st.success(f"Loaded {uploaded.name}: {len(result.raw_df):,} rows × {len(result.raw_df.columns)} columns")
 
     st.divider()
@@ -285,18 +288,41 @@ with tabs[2]:
 
         outcome = st.session_state.anomaly_outcome
         if outcome is not None:
-            rows = [
-                {"Check": r.check_name, "Result": "PASS" if r.passed else "FAIL", "Rows affected": r.affected_row_count, "Summary": r.summary}
-                for r in outcome.results
-            ]
-            st.dataframe(
-                _style_result_column(pd.DataFrame(rows)),
-                use_container_width=True,
-                column_config={
-                    "Check": st.column_config.Column(width=180),
-                    "Summary": st.column_config.Column(width=950),
-                },
+            st.caption(
+                "One section per kind of check. Sections with a failure open automatically; "
+                "failing rows are listed first."
             )
+            for section in group_anomaly_results(outcome.results):
+                n_failing = section.n_failing
+                status = f":red[{n_failing} failing]" if n_failing else ":green[all passing]"
+                with st.expander(
+                    f"**{section.title}** — {status} · {len(section.rows)} checked", expanded=n_failing > 0
+                ):
+                    if section.description:
+                        st.caption(section.description)
+                    st.dataframe(
+                        _style_result_column(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "Checked": r.target,
+                                        "Result": "PASS" if r.passed else "FAIL",
+                                        "Rows affected": r.affected_rows,
+                                        "Summary": r.summary,
+                                    }
+                                    for r in section.rows
+                                ]
+                            )
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Checked": st.column_config.Column(width=260),
+                            "Result": st.column_config.Column(width=80),
+                            "Rows affected": st.column_config.Column(width=120),
+                            "Summary": st.column_config.Column(width=900),
+                        },
+                    )
             st.caption(
                 "Referential integrity and cross-column consistency checks run from the Rules tab, "
                 "once a reference file / column pairs are configured."
@@ -346,7 +372,14 @@ with tabs[3]:
         if st.session_state.custom_expectations:
             st.write("Custom rules added:")
             for i, spec in enumerate(st.session_state.custom_expectations):
-                st.write(f"- `{spec.kind}` on `{spec.column}` {spec.params}")
+                rule_col, remove_col = st.columns([6, 1])
+                rule_col.write(f"- `{spec.kind}` on `{spec.column}` {spec.params}")
+                if remove_col.button("Remove", key=f"remove_custom_rule_{i}"):
+                    st.session_state.custom_expectations.pop(i)
+                    # Results from a run that included this rule are now stale.
+                    st.session_state.validation_outcomes = None
+                    st.session_state.reports = None
+                    st.rerun()
 
         st.subheader("Cross-column consistency checks (SQL)")
         suggested = consistency.suggest_pairs(sr.schema.column_types)
@@ -447,9 +480,13 @@ with tabs[3]:
 
         if st.session_state.validation_outcomes is not None:
             rows = [
-                {"Expectation": v.expectation_type, "Column": v.column or "", "Result": "PASS" if v.success else "FAIL", "Unexpected %": f"{v.unexpected_percent:.1%}"}
+                {"Expectation": v.expectation_type, "Column": v.column or "", "Source": v.source, "Result": "PASS" if v.success else "FAIL", "Rows failing": f"{v.unexpected_count:,} ({v.unexpected_percent:.1%})"}
                 for v in st.session_state.validation_outcomes
             ]
+            st.caption(
+                "Rows failing = rows that break the rule. For a 'unique' rule that means every row "
+                "whose value also appears on another row, so a value repeated twice counts both rows."
+            )
             st.dataframe(_style_result_column(pd.DataFrame(rows)), use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -464,6 +501,7 @@ def _current_recommendations():
         sr.confirmed_df.shape[0],
         coercion_failure_counts=sr.coercion_failure_counts,
         sentinel_null_counts=ir.sentinel_null_counts if ir else None,
+        validation_outcomes=st.session_state.validation_outcomes,
     )
 
 
@@ -480,6 +518,11 @@ with tabs[4]:
             "found, how many rows it touches, and what to do about it; the fix itself is up to you, "
             "since it usually depends on what the data means. Ordered by rows affected."
         )
+        if st.session_state.validation_outcomes is None:
+            st.info(
+                "Validation rules haven't been run yet. Run them in the Rules tab and any failed "
+                "rules will be added to this list."
+            )
         if not recs:
             st.success("No data quality issues were found.")
         else:
@@ -502,7 +545,7 @@ with tabs[4]:
                 hide_index=True,
                 column_config={
                     "Column": st.column_config.Column(width=160),
-                    "Issue": st.column_config.Column(width=220),
+                    "Issue": st.column_config.Column(width=300),
                     "Why it was flagged": st.column_config.Column(width=700),
                     "Recommended action": st.column_config.Column(width=900),
                 },

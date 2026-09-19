@@ -10,7 +10,8 @@ import html
 from datetime import datetime, timezone
 
 from ..anomalies.types import AnomalyResult
-from ..expectations import ValidationOutcome
+from ..anomaly_sections import group_anomaly_results
+from ..expectations import ValidationOutcome, describe_params
 from ..profiling import DatasetProfile
 from ..recommendations import Recommendation
 
@@ -32,6 +33,8 @@ th { color: #9aa4b2; text-transform: uppercase; font-size: 0.72rem; letter-spaci
 .pass { color: #4ade80; font-weight: 600; }
 .fail { color: #f87171; font-weight: 600; }
 section { margin-bottom: 2.5rem; }
+h3 { font-size: 1.05rem; margin: 1.5rem 0 0.25rem; }
+.section-note { color: #9aa4b2; font-size: 0.85rem; margin: 0 0 0.5rem; }
 """
 
 
@@ -68,14 +71,29 @@ def render_html_report(
     </div>
     """
 
-    anomaly_rows = "\n".join(
-        f"<tr><td>{esc(r.check_name)}</td><td>{_status_span(r.passed)}</td>"
-        f"<td>{r.affected_row_count:,}</td><td>{esc(r.summary)}</td></tr>"
-        for r in anomaly_results
-    )
+    anomaly_sections = []
+    for sec in group_anomaly_results(anomaly_results):
+        status = (
+            f'<span class="fail">{sec.n_failing} failing</span>'
+            if sec.n_failing
+            else '<span class="pass">all passing</span>'
+        )
+        body = "\n".join(
+            f"<tr><td>{esc(r.target)}</td><td>{_status_span(r.passed)}</td>"
+            f"<td>{r.affected_rows:,}</td><td>{esc(r.summary)}</td></tr>"
+            for r in sec.rows
+        )
+        anomaly_sections.append(
+            f"<h3>{esc(sec.title)} — {status} · {len(sec.rows)} checked</h3>"
+            f'<p class="section-note">{esc(sec.description)}</p>'
+            "<table><thead><tr><th>Checked</th><th>Result</th><th>Rows affected</th><th>Summary</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>"
+        )
+    anomaly_html = "\n".join(anomaly_sections) or "<p>No checks ran.</p>"
 
     validation_rows = "\n".join(
         f"<tr><td>{esc(v.expectation_type)}</td><td>{esc(v.column or '')}</td>"
+        f"<td>{esc(describe_params(v.params))}</td><td>{esc(v.source)}</td>"
         f"<td>{_status_span(v.success)}</td><td>{v.unexpected_count:,}</td>"
         f"<td>{v.unexpected_percent:.1%}</td></tr>"
         for v in validation_outcomes
@@ -109,17 +127,14 @@ def render_html_report(
 
   <section>
     <h2>Anomaly Detection</h2>
-    <table>
-      <thead><tr><th>Check</th><th>Result</th><th>Rows affected</th><th>Summary</th></tr></thead>
-      <tbody>{anomaly_rows or '<tr><td colspan="4">No checks ran.</td></tr>'}</tbody>
-    </table>
+    {anomaly_html}
   </section>
 
   <section>
     <h2>Validation Rules (Great Expectations)</h2>
     <table>
-      <thead><tr><th>Expectation</th><th>Column</th><th>Result</th><th>Unexpected count</th><th>Unexpected %</th></tr></thead>
-      <tbody>{validation_rows or '<tr><td colspan="5">No expectations were run.</td></tr>'}</tbody>
+      <thead><tr><th>Expectation</th><th>Column</th><th>Rule</th><th>Source</th><th>Result</th><th>Unexpected count</th><th>Unexpected %</th></tr></thead>
+      <tbody>{validation_rows or '<tr><td colspan="7">No validation rules were run.</td></tr>'}</tbody>
     </table>
   </section>
 

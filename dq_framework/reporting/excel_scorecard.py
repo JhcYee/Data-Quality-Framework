@@ -12,7 +12,7 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Font, PatternFill
 
 from ..anomalies.types import AnomalyResult
-from ..expectations import ValidationOutcome
+from ..expectations import ValidationOutcome, describe_params
 from ..profiling import DatasetProfile
 from ..recommendations import Recommendation
 
@@ -52,7 +52,9 @@ def build_excel_scorecard(
         ws1.append([r.check_name, "anomaly", "PASS" if r.passed else "FAIL", pct, r.summary])
     for v in validation_outcomes:
         label = v.expectation_type + (f" ({v.column})" if v.column else "")
-        ws1.append([label, "gx_expectation", "PASS" if v.success else "FAIL", v.unexpected_percent, v.summary])
+        rule = describe_params(v.params)
+        details = v.summary + (f" — rule: {rule}" if rule else "")
+        ws1.append([label, f"validation rule ({v.source})", "PASS" if v.success else "FAIL", v.unexpected_percent, details])
 
     _style_header(ws1)
     max_row = ws1.max_row

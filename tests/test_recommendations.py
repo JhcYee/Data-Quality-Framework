@@ -73,3 +73,107 @@ def test_markdown_lists_each_recommendation():
 
 def test_markdown_when_nothing_found():
     assert "No data quality issues were found" in render_markdown_actions([], "sample")
+
+
+# --- failed validation rules become recommended actions --------------------
+
+from dq_framework.expectations import ValidationOutcome
+
+
+def _rule(exp_type: str, column: str | None, n: int, pct: float = 0.1, params: dict | None = None, success: bool = False):
+    return ValidationOutcome(exp_type, column, success, n, pct, "summary", params or {})
+
+
+def test_failed_unique_rule_becomes_a_recommendation():
+    recs = build_recommendations(
+        [], n_rows=1020, validation_outcomes=[_rule("expect_column_values_to_be_unique", "Email", 1020, 1.0)]
+    )
+    (rec,) = recs
+    assert rec.column == "Email"
+    assert rec.issue == "Values that should be unique repeat"
+    assert rec.affected_rows == 1020
+    assert rec.pct_of_rows == 1.0
+    assert "unique" in rec.finding
+
+
+def test_each_rule_type_maps_to_an_issue():
+    outcomes = [
+        _rule("expect_column_values_to_be_in_set", "status", 4, params={"value_set": ["a", "b"]}),
+        _rule("expect_column_values_to_be_between", "age", 5, params={"min_value": 0, "max_value": 120}),
+        _rule("expect_column_values_to_match_regex", "zip", 6, params={"regex": r"^\d{5}$"}),
+        _rule("expect_table_row_count_to_be_between", None, 0, params={"min_value": 500, "max_value": 900}),
+    ]
+    recs = {r.issue: r for r in build_recommendations([], n_rows=100, validation_outcomes=outcomes)}
+    assert set(recs) == {
+        "Values outside the allowed set",
+        "Values outside the expected range",
+        "Values not matching the expected pattern",
+        "Row count outside the expected range",
+    }
+    assert "'a', 'b'" in recs["Values outside the allowed set"].finding
+    assert "[0, 120]" in recs["Values outside the expected range"].finding
+    assert recs["Row count outside the expected range"].column is None
+
+
+def test_passing_rules_produce_nothing():
+    ok = _rule("expect_column_values_to_be_unique", "id", 0, success=True)
+    assert build_recommendations([], n_rows=100, validation_outcomes=[ok]) == []
+
+
+def test_rule_failure_already_reported_by_an_anomaly_check_is_not_repeated():
+    anomalies = [
+        _fail("nulls:age", 211),
+        _fail("outliers:salary", 7),
+        _fail("duplicates:key[id]", 16),
+    ]
+    outcomes = [
+        _rule("expect_column_values_to_not_be_null", "age", 211),
+        _rule("expect_column_values_to_be_between", "salary", 7),
+        _rule("expect_column_values_to_be_unique", "id", 16),
+    ]
+    recs = build_recommendations(anomalies, n_rows=1000, validation_outcomes=outcomes)
+    assert sorted(r.issue for r in recs) == ["Duplicate keys", "Missing values", "Outliers"]
+
+
+def test_custom_rule_on_same_column_with_different_findings_is_kept():
+    """A hand-written range rule that flags different rows than the outlier
+    check is its own finding, not a repeat."""
+    recs = build_recommendations(
+        [_fail("outliers:salary", 7)],
+        n_rows=1000,
+        validation_outcomes=[
+            _rule("expect_column_values_to_be_between", "salary", 40, params={"min_value": 0, "max_value": 100})
+        ],
+    )
+    assert sorted(r.issue for r in recs) == ["Outliers", "Values outside the expected range"]
+
+
+def test_reports_show_every_recommendation_and_label_custom_rules():
+    """Every recommended action reaches all three reports, and the rule
+    tables say which rules were custom and what they required."""
+    import io
+
+    import openpyxl
+
+    from dq_framework import pipeline
+    from dq_framework.profiling import DatasetProfile
+
+    anomalies = [_fail("nulls:age", 11), _fail("duplicates:exact_rows", 8)]
+    outcomes = [
+        _rule("expect_column_values_to_be_in_set", "status", 4, params={"value_set": ["a", "b"]}),
+        _rule("expect_column_values_to_be_unique", "email", 9),
+    ]
+    outcomes[0].source = "custom"
+    recs = build_recommendations(anomalies, n_rows=100, validation_outcomes=outcomes)
+    assert len(recs) == 4
+
+    profile = DatasetProfile(n_rows=100, n_columns=0, columns={})
+    reports = pipeline.generate_reports("t", anomalies, outcomes, recs, profile)
+
+    assert reports["recommended_actions.md"].decode().count("\n| ") - 1 == len(recs)
+    wb = openpyxl.load_workbook(io.BytesIO(reports["dq_scorecard.xlsx"]))
+    assert wb["Recommended Actions"].max_row - 1 == len(recs)
+    types = [row[1] for row in wb["Rule Summary"].iter_rows(min_row=2, values_only=True)]
+    assert "validation rule (custom)" in types and "validation rule (auto-generated)" in types
+    html = reports["dq_report.html"].decode()
+    assert "one of &#x27;a&#x27;, &#x27;b&#x27;" in html and "custom" in html

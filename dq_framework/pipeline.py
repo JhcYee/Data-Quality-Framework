@@ -98,7 +98,9 @@ def run_validation(
     for spec in custom_expectations or []:
         expectations.add_manual_expectation(suite, spec.kind, spec.column, spec.params, gx_module=gx_module)
     result = expectations.validate_suite(context, df, suite, gx_module=gx_module)
-    return expectations.summarize_validation(result)
+    outcomes = expectations.summarize_validation(result)
+    expectations.tag_custom_outcomes(outcomes, custom_expectations or [])
+    return outcomes
 
 
 def generate_reports(
